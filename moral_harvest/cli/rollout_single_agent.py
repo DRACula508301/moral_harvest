@@ -46,6 +46,12 @@ def resolve_backend(backend: str, checkpoint_path: Path) -> str:
     return "rllib"
 
 
+# Resolve inference device for rollout.
+def resolve_device() -> torch.device:
+    # Prefer CUDA if available, otherwise use CPU.
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 # Build an action function from an RLlib checkpoint.
 def build_rllib_policy(checkpoint_path: Path, explore: bool) -> tuple[Callable[[object], int], Algorithm]:
     # Initialize Ray and restore the RLlib algorithm.
@@ -53,10 +59,12 @@ def build_rllib_policy(checkpoint_path: Path, explore: bool) -> tuple[Callable[[
     ray.init(ignore_reinit_error=True)
     algo = Algorithm.from_checkpoint(str(checkpoint_path.resolve()))
     module = algo.get_module("default_policy")
+    device = resolve_device()
+    module.to(device)
 
     # Return callable that maps observation to action.
     def action_fn(obs: object) -> int:
-        obs_t = torch.tensor(np.expand_dims(obs, axis=0), dtype=torch.float32)
+        obs_t = torch.tensor(np.expand_dims(obs, axis=0), dtype=torch.float32, device=device)
         with torch.no_grad():
             out = module.forward_inference({Columns.OBS: obs_t})
             logits = out["action_dist_inputs"]
@@ -76,8 +84,11 @@ def build_cleanrl_policy(
     envs: HarvestSingleAgentEnv,
     explore: bool,
 ) -> Callable[[object], int]:
+    # Select rollout inference device.
+    device = resolve_device()
+
     # Restore checkpoint and rebuild the Torch policy architecture.
-    checkpoint = torch.load(str(checkpoint_path), map_location="cpu")
+    checkpoint = torch.load(str(checkpoint_path), map_location=device)
     cfg = checkpoint.get("config", {})
     conv_filters = cfg.get("conv_filters", [[16, [8, 8], 4], [32, [4, 4], 2], [64, [3, 3], 1]])
     fcnet_hiddens = cfg.get("fcnet_hiddens", [256, 256])
@@ -87,13 +98,13 @@ def build_cleanrl_policy(
         action_dim=int(envs.action_space.n),
         conv_filters=conv_filters,
         fcnet_hiddens=fcnet_hiddens,
-    )
+    ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
     # Return callable that maps observation to action.
     def action_fn(obs: object) -> int:
-        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
         with torch.no_grad():
             logits, _ = model.forward(obs_t)
             dist = Categorical(logits=logits)
@@ -139,6 +150,8 @@ def main() -> None:
 
     # Resolve rollout backend (RLlib or CleanRL).
     backend = resolve_backend(args.backend, checkpoint_path)
+    rollout_device = resolve_device()
+    print(f"mode=rollout | backend={backend} | device={rollout_device}")
 
     # Build rollout environment with the same wrapper options used in training.
     envs = HarvestSingleAgentEnv(

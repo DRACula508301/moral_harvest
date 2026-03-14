@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import ray
+import torch
 from ray.rllib.algorithms.ppo import PPOConfig
 
 from moral_harvest.envs.registry import HARVEST_SINGLE_AGENT_ENV_ID, register_environments
 from moral_harvest.training.config import SingleAgentTrainConfig
+from moral_harvest.training.results_logger import IterationResultsWriter
 
 
 # Safely read nested dictionary values with a default fallback.
@@ -63,6 +66,22 @@ def _extract_metrics(result: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
+# Determine RLlib GPU resource count from availability and optional override.
+def _resolve_num_gpus(num_gpus_override: int | None) -> int:
+    # Auto mode uses one GPU when CUDA is available.
+    if num_gpus_override is None:
+        return 1 if torch.cuda.is_available() else 0
+
+    # Explicit non-positive override disables GPU.
+    if num_gpus_override <= 0:
+        return 0
+
+    # Positive override is respected only if CUDA exists.
+    if torch.cuda.is_available():
+        return num_gpus_override
+    return 0
+
+
 # Run single-agent PPO training and checkpoint at a fixed iteration cadence.
 def run_single_agent_ppo(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
     # Ensure custom RLlib environments are available before building the algorithm.
@@ -70,6 +89,12 @@ def run_single_agent_ppo(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
 
     # Start Ray runtime for RLlib execution.
     ray.init(ignore_reinit_error=True)
+
+    # Resolve compute resources: GPU when available, else CPU.
+    resolved_num_gpus = _resolve_num_gpus(cfg.num_gpus)
+    print(
+        f"backend=rllib | framework={cfg.framework} | num_gpus={resolved_num_gpus}"
+    )
 
     # Build PPOConfig with env, rollout, optimization, and resource settings.
     ppo_config = (
@@ -100,7 +125,7 @@ def run_single_agent_ppo(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
                 "fcnet_activation": cfg.fcnet_activation,
             }
         )
-        .resources(num_gpus=cfg.num_gpus)
+        .resources(num_gpus=resolved_num_gpus)
     )
 
     # Optionally set deterministic seed handling for reproducibility.
@@ -113,6 +138,11 @@ def run_single_agent_ppo(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
     checkpoint_root = Path(cfg.checkpoint_root).resolve()
     checkpoint_root.mkdir(parents=True, exist_ok=True)
 
+    # Build deterministic results artifact directory for per-iteration metrics.
+    run_name = cfg.run_name or f"{cfg.backend}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    results_dir = Path(cfg.results_root).resolve() / cfg.backend / run_name
+    results_writer = IterationResultsWriter(results_dir)
+
     training_history: list[dict[str, Any]] = []
 
     try:
@@ -121,7 +151,10 @@ def run_single_agent_ppo(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
             result = algo.train()
             metrics = _extract_metrics(result)
             metrics["iteration"] = iteration
+            metrics["backend"] = cfg.backend
+            metrics["run_name"] = run_name
             training_history.append(metrics)
+            results_writer.write(metrics)
 
             print(
                 " | ".join(
@@ -148,11 +181,15 @@ def run_single_agent_ppo(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
         return {
             "status": "completed",
             "backend": "rllib",
+            "run_name": run_name,
+            "results_dir": str(results_dir),
             "iterations": cfg.stop_iters,
             "final_checkpoint": str(final_checkpoint_path),
             "history": training_history,
         }
     finally:
+        # Ensure results files are closed before shutdown.
+        results_writer.close()
         # Always release algorithm and Ray runtime resources.
         algo.stop()
         ray.shutdown()

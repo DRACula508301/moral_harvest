@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from torch.distributions.categorical import Categorical
 
 from moral_harvest.envs.meltingpot_env import HarvestSingleAgentEnv
 from moral_harvest.training.config import SingleAgentTrainConfig
+from moral_harvest.training.results_logger import IterationResultsWriter
 
 
 # Build a Torch CNN+MLP actor-critic for RGB observations.
@@ -115,6 +117,20 @@ def _compute_gae(
     return advantages, returns
 
 
+# Resolve torch device for CleanRL training.
+def _resolve_device(num_gpus_override: int | None) -> torch.device:
+    # Auto mode uses CUDA if available.
+    if num_gpus_override is None:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Explicit non-positive override forces CPU.
+    if num_gpus_override <= 0:
+        return torch.device("cpu")
+
+    # Positive override uses CUDA when available; otherwise fallback to CPU.
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 # Train a single-agent PPO policy using a CleanRL-style loop.
 def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
     # Create env and infer observation/action dimensions.
@@ -134,7 +150,8 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
     action_dim = int(env.action_space.n)
 
     # Build model and optimizer.
-    device = torch.device("cpu")
+    device = _resolve_device(cfg.num_gpus)
+    print(f"backend=cleanrl | device={device}")
     model = CleanRLCNNActorCritic(
         obs_shape=obs_shape,
         action_dim=action_dim,
@@ -148,6 +165,11 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
     obs_t = torch.tensor(obs, dtype=torch.float32, device=device)
     checkpoint_root = Path(cfg.checkpoint_root).resolve()
     checkpoint_root.mkdir(parents=True, exist_ok=True)
+
+    # Build deterministic results artifact directory for per-iteration metrics.
+    run_name = cfg.run_name or f"{cfg.backend}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    results_dir = Path(cfg.results_root).resolve() / cfg.backend / run_name
+    results_writer = IterationResultsWriter(results_dir)
 
     # Allocate rollout buffers.
     rollout_steps = int(cfg.train_batch_size)
@@ -257,12 +279,15 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
             )
             metrics = {
                 "iteration": iteration,
+                "backend": cfg.backend,
+                "run_name": run_name,
                 "episode_reward_mean": episode_reward_mean,
                 "policy_loss": last_policy_loss,
                 "value_loss": last_value_loss,
                 "entropy": last_entropy,
             }
             training_history.append(metrics)
+            results_writer.write(metrics)
 
             print(
                 " | ".join(
@@ -305,10 +330,15 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
         return {
             "status": "completed",
             "backend": "cleanrl",
+            "device": str(device),
+            "run_name": run_name,
+            "results_dir": str(results_dir),
             "iterations": cfg.stop_iters,
             "final_checkpoint": str(final_checkpoint_path),
             "history": training_history,
         }
     finally:
+        # Ensure results files are closed before shutdown.
+        results_writer.close()
         # Release environment resources.
         env.close()

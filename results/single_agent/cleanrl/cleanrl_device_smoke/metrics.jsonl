@@ -1,0 +1,1 @@
+{"iteration": 1, "backend": "cleanrl", "run_name": "cleanrl_device_smoke", "episode_reward_mean": null, "policy_loss": 0.001199614256620407, "value_loss": 2.2619846617999428e-07, "entropy": 2.078359603881836}

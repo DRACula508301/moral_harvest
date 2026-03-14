@@ -17,6 +17,8 @@ class SingleAgentTrainConfig:
     stop_iters: int = 1000
     checkpoint_every: int = 100
     checkpoint_root: str = "checkpoints/single_agent"
+    results_root: str = "results/single_agent"
+    run_name: str | None = None
 
     # Rollout/optimizer settings.
     num_env_runners: int = 0
@@ -45,7 +47,7 @@ class SingleAgentTrainConfig:
 
     # Runtime framework/resources.
     framework: str = "torch"
-    num_gpus: int = 0
+    num_gpus: int | None = None
     seed: int | None = None
 
     # Wrapper-specific controls.

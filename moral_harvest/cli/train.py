@@ -15,12 +15,14 @@ def parse_args() -> argparse.Namespace:
 
     # Environment and stopping controls.
     parser.add_argument("--mode", choices=["single-agent"], default="single-agent")
-    parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="cleanrl")
+    parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="rllib")
     parser.add_argument("--substrate", default="commons_harvest__open")
     parser.add_argument("--focal-agent", default="player_0")
     parser.add_argument("--stop-iters", type=int, default=1000)
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--checkpoint-root", default="checkpoints/single_agent")
+    parser.add_argument("--results-root", default="results/single_agent")
+    parser.add_argument("--run-name", default=None)
 
     # PPO optimization hyperparameters.
     parser.add_argument("--num-env-runners", type=int, default=0)
@@ -35,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ent-coef", type=float, default=0.01)
     parser.add_argument("--vf-coef", type=float, default=0.5)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--num-gpus", type=int, default=1)
+    parser.add_argument("--num-gpus", type=int, default=None, help="Optional override; default auto-detects GPU")
     parser.add_argument("--seed", type=int, default=None)
 
     # Observation/action wrapper controls.
@@ -60,6 +62,8 @@ def main() -> None:
             stop_iters=args.stop_iters,
             checkpoint_every=args.checkpoint_every,
             checkpoint_root=args.checkpoint_root,
+            results_root=args.results_root,
+            run_name=args.run_name,
             num_env_runners=args.num_env_runners,
             train_batch_size=args.train_batch_size,
             minibatch_size=args.minibatch_size,
@@ -76,6 +80,9 @@ def main() -> None:
             include_ready_to_shoot=args.include_ready_to_shoot,
             no_op_action=args.no_op_action,
         )
+        # Log backend selection for traceability.
+        print(f"mode=single-agent | backend={cfg.backend}")
+
         # Execute training and print structured output for later scripting.
         if cfg.backend == "rllib":
             output = run_single_agent_ppo(cfg)

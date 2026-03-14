@@ -1,0 +1,28 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m compileall moral_harvest\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.train --mode single-agent --backend cleanrl --substrate commons_harvest__open --focal-agent player_0 --stop-iters 1 --checkpoint-every 100 --checkpoint-root checkpoints/single_agent/cleanrl_artifact --results-root results/single_agent --run-name cleanrl_artifact_smoke --train-batch-size 128 --minibatch-size 64 --num-epochs 1\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.train --mode single-agent --backend cleanrl --stop-iters 1 --train-batch-size 64 --minibatch-size 32 --num-epochs 1 --checkpoint-root checkpoints/single_agent/cleanrl_device_smoke --results-root results/single_agent --run-name cleanrl_device_smoke\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.rollout_single_agent --backend cleanrl --checkpoint-path checkpoints/single_agent/cleanrl_device_smoke/cleanrl_final_iter_000001\\.pt --episodes 1 --substrate commons_harvest__open --focal-agent player_0\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.train --mode single-agent --backend cleanrl --stop-iters 1 --train-batch-size 32 --minibatch-size 32 --num-epochs 1 --checkpoint-root checkpoints/single_agent/log_smoke --results-root results/single_agent --run-name log_smoke_cleanrl\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.rollout_single_agent --backend cleanrl --checkpoint-path checkpoints/single_agent/log_smoke/cleanrl_final_iter_000001\\.pt --episodes 1 --substrate commons_harvest__open --focal-agent player_0\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
