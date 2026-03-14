@@ -5,6 +5,7 @@ import json
 
 from moral_harvest.experiments.single_agent_cleanrl import run_single_agent_cleanrl
 from moral_harvest.experiments.single_agent_ppo import run_single_agent_ppo
+from moral_harvest.experiments.vanilla_selfish import run_vanilla_selfish_ippo
 from moral_harvest.training.config import SingleAgentTrainConfig
 
 
@@ -14,10 +15,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Moral Harvest training CLI")
 
     # Environment and stopping controls.
-    parser.add_argument("--mode", choices=["single-agent"], default="single-agent")
-    parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="rllib")
+    parser.add_argument("--mode", choices=["single-agent", "multi-agent-selfish"], default="single-agent")
+    parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="cleanrl")
     parser.add_argument("--substrate", default="commons_harvest__open")
     parser.add_argument("--focal-agent", default="player_0")
+    parser.add_argument("--num-agents", type=int, default=10)
     parser.add_argument("--stop-iters", type=int, default=1000)
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--checkpoint-root", default="checkpoints/single_agent")
@@ -53,12 +55,13 @@ def main() -> None:
     # Parse arguments once and dispatch to the selected mode.
     args = parse_args()
 
-    if args.mode == "single-agent":
+    if args.mode in {"single-agent", "multi-agent-selfish"}:
         # Translate CLI args into a strongly-typed training config.
         cfg = SingleAgentTrainConfig(
             backend=args.backend,
             substrate_name=args.substrate,
             focal_agent=args.focal_agent,
+            num_agents=args.num_agents,
             stop_iters=args.stop_iters,
             checkpoint_every=args.checkpoint_every,
             checkpoint_root=args.checkpoint_root,
@@ -81,13 +84,18 @@ def main() -> None:
             no_op_action=args.no_op_action,
         )
         # Log backend selection for traceability.
-        print(f"mode=single-agent | backend={cfg.backend}")
+        print(f"mode={args.mode} | backend={cfg.backend}")
 
         # Execute training and print structured output for later scripting.
-        if cfg.backend == "rllib":
+        if args.mode == "single-agent" and cfg.backend == "rllib":
             output = run_single_agent_ppo(cfg)
-        else:
+        elif args.mode == "single-agent" and cfg.backend == "cleanrl":
             output = run_single_agent_cleanrl(cfg)
+        elif args.mode == "multi-agent-selfish" and cfg.backend == "rllib":
+            print(f"mode=multi-agent-selfish | backend={cfg.backend} | num_agents={cfg.num_agents}")
+            output = run_vanilla_selfish_ippo(cfg)
+        else:
+            raise ValueError("multi-agent-selfish mode currently supports only backend=rllib")
         print(json.dumps(output, indent=2, default=str))
 
 

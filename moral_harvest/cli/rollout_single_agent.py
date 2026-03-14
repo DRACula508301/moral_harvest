@@ -150,8 +150,6 @@ def main() -> None:
 
     # Resolve rollout backend (RLlib or CleanRL).
     backend = resolve_backend(args.backend, checkpoint_path)
-    rollout_device = resolve_device()
-    print(f"mode=rollout | backend={backend} | device={rollout_device}")
 
     # Build rollout environment with the same wrapper options used in training.
     envs = HarvestSingleAgentEnv(

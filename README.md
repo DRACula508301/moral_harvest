@@ -8,8 +8,8 @@ The current runnable path is a **single PPO focal agent** in `commons_harvest__o
 The wrapper keeps only local observations (`RGB` by default) and assigns no-op actions to all non-focal agents.
 
 Both backends are available:
-- `rllib` (default): RLlib PPO implementation.
-- `cleanrl`: local CleanRL-style PPO implementation.
+- `cleanrl` (default): CleanRL PPO implementation.
+- `rllib`: RLlib PPO implementation.
 
 ### Run from WSL using `.venv-linux`
 
@@ -20,7 +20,7 @@ wsl
 ```
 
 ```bash
-cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && .venv-linux/bin/python -m moral_harvest.cli.train --mode single-agent --backend rllib --substrate commons_harvest__open --focal-agent player_0 --stop-iters 300 --checkpoint-every 100 --checkpoint-root checkpoints/single_agent/rllib
+cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && .venv-linux/bin/python -m moral_harvest.cli.train --mode single-agent --substrate commons_harvest__open --focal-agent player_0 --stop-iters 300 --checkpoint-every 100 --checkpoint-root checkpoints/single_agent/cleanrl
 ```
 
 ### Run CleanRL backend from WSL using `.venv-linux`

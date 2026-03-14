@@ -23,6 +23,10 @@
         "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.rollout_single_agent --backend cleanrl --checkpoint-path checkpoints/single_agent/log_smoke/cleanrl_final_iter_000001\\.pt --episodes 1 --substrate commons_harvest__open --focal-agent player_0\"$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^wsl bash -lc \"cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && \\.venv-linux/bin/python -m moral_harvest\\.cli\\.train --mode multi-agent-selfish --backend rllib --num-agents 2 --substrate commons_harvest__open --stop-iters 1 --train-batch-size 128 --minibatch-size 64 --num-epochs 1 --checkpoint-root checkpoints/multi_agent/selfish_smoke --results-root results/multi_agent --run-name selfish_smoke_2agents\"$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

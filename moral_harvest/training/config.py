@@ -7,11 +7,12 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class SingleAgentTrainConfig:
     # Training backend selection.
-    backend: str = "rllib"
+    backend: str = "cleanrl"
 
     # Environment selection.
     substrate_name: str = "commons_harvest__open"
     focal_agent: str = "player_0"
+    num_agents: int = 10
 
     # Training horizon and checkpoint cadence.
     stop_iters: int = 1000
