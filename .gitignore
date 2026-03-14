@@ -1,3 +1,7 @@
+reference_code/
+.github/prompts/
+checkpoints/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -137,7 +141,7 @@ celerybeat.pid
 # Environments
 .env
 .envrc
-.venv
+.venv*
 env/
 venv/
 ENV/

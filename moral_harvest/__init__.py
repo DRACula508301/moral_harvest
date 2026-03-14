@@ -1,0 +1,1 @@
+"""Moral Harvest training package."""
