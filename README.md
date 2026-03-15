@@ -8,8 +8,8 @@ The current runnable path is a **single PPO focal agent** in `commons_harvest__o
 The wrapper keeps only local observations (`RGB` by default) and assigns no-op actions to all non-focal agents.
 
 Both backends are available:
-- `rllib` (default): RLlib PPO implementation.
-- `cleanrl`: CleanRL PPO implementation.
+- `cleanrl` (default): CleanRL PPO implementation.
+- `rllib`: RLlib PPO implementation.
 
 ### Run from WSL using `.venv-linux`
 
@@ -91,8 +91,8 @@ Optional:
 
 This mode trains distinct policies (one per agent) in a shared Harvest environment.
 Current support:
-- Backend: `rllib` (default) and `cleanrl`.
-- Policy mapping: each `player_i` maps to `policy_player_i`.
+- Backend: `cleanrl` only (`rllib` is deprecated for this mode).
+- Training is vectorized with SuperSuit (`--num-envs`) and uses a single multi-agent optimizer step.
 
 ### Run from WSL using `.venv-linux`
 
@@ -103,7 +103,7 @@ wsl
 ```
 
 ```bash
-cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && .venv-linux/bin/python -m moral_harvest.cli.train --mode multi-agent-selfish --num-agents 10 --substrate commons_harvest__open --stop-iters 300 --checkpoint-every 100 --checkpoint-root checkpoints/multi_agent/selfish --results-root results/multi_agent --run-name selfish_10_agents
+cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && .venv-linux/bin/python -m moral_harvest.cli.train --mode multi-agent-selfish --backend cleanrl --num-agents 10 --num-envs 2 --anneal-lr --substrate commons_harvest__open --stop-iters 300 --checkpoint-every 100 --checkpoint-root checkpoints/multi_agent/selfish --results-root results/multi_agent --run-name selfish_10_agents
 ```
 
 Notes:
@@ -111,5 +111,5 @@ Notes:
 - Per-iteration metrics are saved under `results/multi_agent/<backend>/<run_name>/`.
 - Checkpoints are saved under `checkpoints/multi_agent/selfish/`.
 - Training now automatically saves `training_curves.png` in the same run directory at the end of each run.
-
-To run CleanRL instead, add `--backend cleanrl`.
+- Use `--num-envs` to increase rollout throughput with vectorized environments.
+- Use `--no-anneal-lr` to disable linear learning-rate annealing.

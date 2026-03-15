@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class SingleAgentTrainConfig:
     # Training backend selection.
-    backend: str = "rllib"
+    backend: str = "cleanrl"
 
     # Environment selection.
     substrate_name: str = "commons_harvest__open"
@@ -33,6 +33,8 @@ class SingleAgentTrainConfig:
     ent_coef: float = 0.01
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
+    anneal_lr: bool = True
+    num_envs: int = 1
 
     # CNN/MLP model settings for 88x88x3 Harvest observations.
     conv_filters: list[list[int | list[int]]] = field(

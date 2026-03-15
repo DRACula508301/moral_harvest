@@ -9,62 +9,149 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from shimmy import MeltingPotCompatibilityV0
 
-from moral_harvest.envs.meltingpot_multiagent_env import HarvestMultiAgentEnv
-from moral_harvest.experiments.single_agent_ppo_cleanrl import (
-    CleanRLCNNActorCritic,
-    _compute_gae,
-    _resolve_device,
-)
+from moral_harvest.experiments.single_agent_ppo_cleanrl import _resolve_device
+from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
 from moral_harvest.training.config import SingleAgentTrainConfig
 from moral_harvest.training.results_logger import IterationResultsWriter
 
 
-# Build a zero observation tensor matching the configured observation space.
-def _zero_observation(obs_shape: tuple[int, int, int]) -> np.ndarray:
-    return np.zeros(obs_shape, dtype=np.float32)
+# Stack one independent policy/value submodule per agent under one nn.Module.
+class MultiAgentCleanRLCNN(nn.Module):
+    # Build per-agent actor-critic modules with shared architecture.
+    def __init__(
+        self,
+        num_agents: int,
+        obs_shape: tuple[int, int, int],
+        action_dim: int,
+        conv_filters: list[list[int | list[int]]],
+        fcnet_hiddens: list[int],
+    ):
+        super().__init__()
+        self.num_agents = num_agents
+        self.agents = nn.ModuleList(
+            [
+                CleanRLCNNActorCritic(
+                    obs_shape=obs_shape,
+                    action_dim=action_dim,
+                    conv_filters=conv_filters,
+                    fcnet_hiddens=fcnet_hiddens,
+                )
+                for _ in range(num_agents)
+            ]
+        )
+
+    # Predict values for all agents for a batch of observations.
+    def get_values(self, obs: torch.Tensor) -> torch.Tensor:
+        values = []
+        for agent_index in range(self.num_agents):
+            _, value = self.agents[agent_index].forward(obs[:, agent_index])
+            values.append(value)
+        return torch.stack(values, dim=1)
+
+    # Sample/evaluate actions and values for all agents.
+    def get_actions_and_values(
+        self,
+        obs: torch.Tensor,
+        actions: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        out_actions = []
+        out_logprobs = []
+        out_entropies = []
+        out_values = []
+
+        for agent_index in range(self.num_agents):
+            agent_obs = obs[:, agent_index]
+            agent_actions = actions[:, agent_index] if actions is not None else None
+            sampled_action, logprob, entropy, value = self.agents[agent_index].get_action_and_value(
+                agent_obs,
+                agent_actions,
+            )
+            out_actions.append(sampled_action)
+            out_logprobs.append(logprob)
+            out_entropies.append(entropy)
+            out_values.append(value)
+
+        return (
+            torch.stack(out_actions, dim=1),
+            torch.stack(out_logprobs, dim=1),
+            torch.stack(out_entropies, dim=1),
+            torch.stack(out_values, dim=1),
+        )
 
 
-# Train vanilla selfish IPPO with one CleanRL PPO policy per agent.
+# Ensure observation tensors are float32 RGB normalized to [0, 1].
+def _normalize_rgb(observations: np.ndarray) -> np.ndarray:
+    return observations.astype(np.float32) / 255.0
+
+
+# Reshape flattened [num_envs * num_agents, ...] arrays to [num_envs, num_agents, ...].
+def _reshape_flat_by_agent(
+    values: np.ndarray,
+    num_envs: int,
+    num_agents: int,
+) -> np.ndarray:
+    return values.reshape(num_envs, num_agents, *values.shape[1:])
+
+
+# Train vanilla selfish IPPO with one optimizer and summed per-agent losses.
 def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
     if cfg.include_ready_to_shoot:
         raise ValueError(
             "CleanRL backend currently supports RGB-only observations. Omit --include-ready-to-shoot."
         )
 
-    env = HarvestMultiAgentEnv(
-        {
-            "substrate_name": cfg.substrate_name,
-            "num_agents": cfg.num_agents,
-            "no_op_action": cfg.no_op_action,
-            "include_ready_to_shoot": cfg.include_ready_to_shoot,
-        }
+    if cfg.num_envs <= 0:
+        raise ValueError("--num-envs must be a positive integer.")
+
+    try:
+        import supersuit as ss
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "SuperSuit is required for multi-agent CleanRL vectorization. Install dependency 'supersuit'."
+        ) from exc
+
+    # Build vectorized PettingZoo-compatible environment through SuperSuit wrappers.
+    base_env = MeltingPotCompatibilityV0(substrate_name=cfg.substrate_name, render_mode="rgb_array")
+    env = ss.pettingzoo_env_to_vec_env_v1(base_env)
+    env = ss.concat_vec_envs_v1(
+        env,
+        num_vec_envs=cfg.num_envs,
+        num_cpus=0,
+        base_class="gymnasium",
     )
 
-    # Infer shared observation/action spaces for each per-agent policy.
-    obs_shape = env.get_observation_space("player_0").shape
-    action_dim = int(env.get_action_space("player_0").n)
-    agent_ids = [f"player_{index}" for index in range(cfg.num_agents)]
+    agent_ids = list(getattr(base_env, "possible_agents", [f"player_{index}" for index in range(cfg.num_agents)]))
+    num_agents = len(agent_ids)
 
-    # Build one model and optimizer per agent for independent PPO updates.
+    # Infer spaces from vectorized env.
+    obs_shape = env.observation_space["RGB"].shape
+    action_dim = int(env.action_space.n)
+
     device = _resolve_device(cfg.num_gpus)
-    print(f"backend=cleanrl | mode=multi-agent-selfish | device={device}")
+    print(
+        f"backend=cleanrl | mode=multi-agent-selfish | device={device} | num_envs={cfg.num_envs} | anneal_lr={cfg.anneal_lr}"
+    )
 
-    models = {
-        agent_id: CleanRLCNNActorCritic(
-            obs_shape=obs_shape,
-            action_dim=action_dim,
-            conv_filters=cfg.conv_filters,
-            fcnet_hiddens=cfg.fcnet_hiddens,
-        ).to(device)
-        for agent_id in agent_ids
-    }
-    optimizers = {
-        agent_id: optim.Adam(models[agent_id].parameters(), lr=cfg.lr)
-        for agent_id in agent_ids
-    }
+    model = MultiAgentCleanRLCNN(
+        num_agents=num_agents,
+        obs_shape=obs_shape,
+        action_dim=action_dim,
+        conv_filters=cfg.conv_filters,
+        fcnet_hiddens=cfg.fcnet_hiddens,
+    ).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=cfg.lr, eps=1e-5)
 
-    observations, _ = env.reset(seed=cfg.seed)
+    reset_obs, _ = env.reset(seed=cfg.seed)
+    next_obs = torch.tensor(
+        _reshape_flat_by_agent(_normalize_rgb(reset_obs["RGB"]), cfg.num_envs, num_agents),
+        dtype=torch.float32,
+        device=device,
+    )
+    next_terminations = torch.zeros((cfg.num_envs, num_agents), dtype=torch.float32, device=device)
+    next_truncations = torch.zeros((cfg.num_envs, num_agents), dtype=torch.float32, device=device)
+
     checkpoint_root = Path(cfg.checkpoint_root).resolve()
     checkpoint_root.mkdir(parents=True, exist_ok=True)
 
@@ -73,152 +160,178 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
     results_writer = IterationResultsWriter(results_dir)
 
     rollout_steps = int(cfg.train_batch_size)
-    obs_buffer = {
-        agent_id: torch.zeros((rollout_steps, *obs_shape), dtype=torch.float32, device=device)
-        for agent_id in agent_ids
-    }
-    actions_buffer = {
-        agent_id: torch.zeros(rollout_steps, dtype=torch.long, device=device)
-        for agent_id in agent_ids
-    }
-    logprobs_buffer = {
-        agent_id: torch.zeros(rollout_steps, dtype=torch.float32, device=device)
-        for agent_id in agent_ids
-    }
-    rewards_buffer = {
-        agent_id: torch.zeros(rollout_steps, dtype=torch.float32, device=device)
-        for agent_id in agent_ids
-    }
-    dones_buffer = {
-        agent_id: torch.zeros(rollout_steps, dtype=torch.float32, device=device)
-        for agent_id in agent_ids
-    }
-    values_buffer = {
-        agent_id: torch.zeros(rollout_steps, dtype=torch.float32, device=device)
-        for agent_id in agent_ids
-    }
+    obs_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents, *obs_shape),
+        dtype=torch.float32,
+        device=device,
+    )
+    actions_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents),
+        dtype=torch.long,
+        device=device,
+    )
+    logprobs_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents),
+        dtype=torch.float32,
+        device=device,
+    )
+    rewards_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents),
+        dtype=torch.float32,
+        device=device,
+    )
+    terminations_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents),
+        dtype=torch.float32,
+        device=device,
+    )
+    truncations_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents),
+        dtype=torch.float32,
+        device=device,
+    )
+    values_buffer = torch.zeros(
+        (rollout_steps, cfg.num_envs, num_agents),
+        dtype=torch.float32,
+        device=device,
+    )
 
-    zero_obs = _zero_observation(obs_shape)
-    episode_returns = {agent_id: 0.0 for agent_id in agent_ids}
+    episode_returns = torch.zeros((cfg.num_envs, num_agents), dtype=torch.float32, device=device)
     training_history: list[dict[str, Any]] = []
 
     try:
         for iteration in range(1, cfg.stop_iters + 1):
+            if cfg.anneal_lr:
+                frac = 1.0 - (iteration - 1.0) / float(cfg.stop_iters)
+                optimizer.param_groups[0]["lr"] = frac * cfg.lr
+
             iteration_episode_returns: list[float] = []
 
             for step in range(rollout_steps):
-                action_dict: dict[str, int] = {}
+                obs_buffer[step] = next_obs
+                terminations_buffer[step] = next_terminations
+                truncations_buffer[step] = next_truncations
 
-                # Sample one action per agent and populate rollout buffers.
-                for agent_id in agent_ids:
-                    obs_np = observations.get(agent_id, zero_obs)
-                    obs_tensor = torch.tensor(obs_np, dtype=torch.float32, device=device)
-                    obs_buffer[agent_id][step] = obs_tensor
-
-                    with torch.no_grad():
-                        action, log_prob, _, value = models[agent_id].get_action_and_value(obs_tensor.unsqueeze(0))
-
-                    action_dict[agent_id] = int(action.item())
-                    actions_buffer[agent_id][step] = action
-                    logprobs_buffer[agent_id][step] = log_prob
-                    values_buffer[agent_id][step] = value.squeeze(0)
-
-                next_obs, rewards, terminations, truncations, _ = env.step(action_dict)
-
-                # Store per-agent rewards/dones and track episode returns.
-                for agent_id in agent_ids:
-                    reward = float(rewards.get(agent_id, 0.0))
-                    done = bool(terminations.get(agent_id, False) or truncations.get(agent_id, False))
-                    rewards_buffer[agent_id][step] = reward
-                    dones_buffer[agent_id][step] = float(done)
-
-                    episode_returns[agent_id] += reward
-
-                done_all = bool(terminations.get("__all__", False) or truncations.get("__all__", False))
-                if done_all:
-                    iteration_episode_returns.append(float(np.mean(list(episode_returns.values()))))
-                    episode_returns = {agent_id: 0.0 for agent_id in agent_ids}
-                    observations, _ = env.reset()
-                else:
-                    observations = next_obs
-
-            # Compute GAE/returns for each agent.
-            advantages = {}
-            returns = {}
-            for agent_id in agent_ids:
                 with torch.no_grad():
-                    next_obs_np = observations.get(agent_id, zero_obs)
-                    next_obs_tensor = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
-                    _, next_value = models[agent_id].forward(next_obs_tensor.unsqueeze(0))
+                    action, logprob, _, value = model.get_actions_and_values(next_obs)
 
-                adv, ret = _compute_gae(
-                    rewards=rewards_buffer[agent_id],
-                    dones=dones_buffer[agent_id],
-                    values=values_buffer[agent_id],
-                    next_value=next_value.squeeze(0),
-                    gamma=cfg.gamma,
-                    gae_lambda=cfg.gae_lambda,
+                actions_buffer[step] = action
+                logprobs_buffer[step] = logprob
+                values_buffer[step] = value
+
+                flat_actions = action.reshape(-1).cpu().numpy()
+                next_obs_raw, reward_raw, termination_raw, truncation_raw, _ = env.step(flat_actions)
+
+                next_rewards = torch.tensor(
+                    _reshape_flat_by_agent(np.asarray(reward_raw, dtype=np.float32), cfg.num_envs, num_agents),
+                    dtype=torch.float32,
+                    device=device,
                 )
-                advantages[agent_id] = adv
-                returns[agent_id] = ret
+                next_terminations = torch.tensor(
+                    _reshape_flat_by_agent(
+                        np.asarray(termination_raw, dtype=np.float32), cfg.num_envs, num_agents
+                    ),
+                    dtype=torch.float32,
+                    device=device,
+                )
+                next_truncations = torch.tensor(
+                    _reshape_flat_by_agent(np.asarray(truncation_raw, dtype=np.float32), cfg.num_envs, num_agents),
+                    dtype=torch.float32,
+                    device=device,
+                )
+                next_obs = torch.tensor(
+                    _reshape_flat_by_agent(_normalize_rgb(next_obs_raw["RGB"]), cfg.num_envs, num_agents),
+                    dtype=torch.float32,
+                    device=device,
+                )
 
-            # Optimize each agent policy independently.
-            b_inds = np.arange(rollout_steps)
-            policy_losses: list[float] = []
-            value_losses: list[float] = []
-            entropies: list[float] = []
+                rewards_buffer[step] = next_rewards
 
-            for agent_id in agent_ids:
-                last_policy_loss = 0.0
-                last_value_loss = 0.0
-                last_entropy = 0.0
+                episode_returns = episode_returns + next_rewards
+                done_env = torch.all((next_terminations > 0.0) | (next_truncations > 0.0), dim=1)
+                done_env_indices = torch.where(done_env)[0]
+                for env_index in done_env_indices.tolist():
+                    iteration_episode_returns.append(float(episode_returns[env_index].mean().item()))
+                    episode_returns[env_index] = 0.0
 
-                for _ in range(cfg.num_epochs):
-                    np.random.shuffle(b_inds)
-                    for start in range(0, rollout_steps, cfg.minibatch_size):
-                        end = start + cfg.minibatch_size
-                        mb_inds = b_inds[start:end]
+            with torch.no_grad():
+                next_values = model.get_values(next_obs)
+                advantages = torch.zeros_like(rewards_buffer)
+                dones_buffer = torch.maximum(terminations_buffer, truncations_buffer)
+                next_done = torch.maximum(next_terminations, next_truncations)
 
-                        _, new_logprob, entropy, new_value = models[agent_id].get_action_and_value(
-                            obs_buffer[agent_id][mb_inds],
-                            actions_buffer[agent_id][mb_inds],
-                        )
+                last_gae = torch.zeros((cfg.num_envs, num_agents), dtype=torch.float32, device=device)
+                for step in reversed(range(rollout_steps)):
+                    if step == rollout_steps - 1:
+                        next_non_terminal = 1.0 - next_done
+                        next_value_step = next_values
+                    else:
+                        next_non_terminal = 1.0 - dones_buffer[step + 1]
+                        next_value_step = values_buffer[step + 1]
 
-                        log_ratio = new_logprob - logprobs_buffer[agent_id][mb_inds]
-                        ratio = torch.exp(log_ratio)
+                    delta = rewards_buffer[step] + cfg.gamma * next_value_step * next_non_terminal - values_buffer[step]
+                    last_gae = delta + cfg.gamma * cfg.gae_lambda * next_non_terminal * last_gae
+                    advantages[step] = last_gae
 
-                        mb_advantages = advantages[agent_id][mb_inds]
-                        mb_advantages = (mb_advantages - mb_advantages.mean()) / (
-                            mb_advantages.std(unbiased=False) + 1e-8
-                        )
+                returns = advantages + values_buffer
 
-                        policy_loss_1 = -mb_advantages * ratio
-                        policy_loss_2 = -mb_advantages * torch.clamp(
-                            ratio,
-                            1.0 - cfg.clip_coef,
-                            1.0 + cfg.clip_coef,
-                        )
-                        policy_loss = torch.max(policy_loss_1, policy_loss_2).mean()
+            batch_size = rollout_steps * cfg.num_envs
+            b_obs = obs_buffer.reshape(batch_size, num_agents, *obs_shape)
+            b_actions = actions_buffer.reshape(batch_size, num_agents)
+            b_logprobs = logprobs_buffer.reshape(batch_size, num_agents)
+            b_advantages = advantages.reshape(batch_size, num_agents)
+            b_returns = returns.reshape(batch_size, num_agents)
 
-                        value_loss = 0.5 * ((new_value - returns[agent_id][mb_inds]) ** 2).mean()
-                        entropy_loss = entropy.mean()
+            b_inds = np.arange(batch_size)
+            last_policy_loss = 0.0
+            last_value_loss = 0.0
+            last_entropy = 0.0
 
-                        loss = policy_loss + cfg.vf_coef * value_loss - cfg.ent_coef * entropy_loss
+            for _ in range(cfg.num_epochs):
+                np.random.shuffle(b_inds)
+                for start in range(0, batch_size, cfg.minibatch_size):
+                    end = start + cfg.minibatch_size
+                    mb_inds = b_inds[start:end]
 
-                        optimizers[agent_id].zero_grad()
-                        loss.backward()
-                        nn.utils.clip_grad_norm_(models[agent_id].parameters(), cfg.max_grad_norm)
-                        optimizers[agent_id].step()
+                    _, new_logprob, entropy, new_value = model.get_actions_and_values(
+                        b_obs[mb_inds],
+                        b_actions[mb_inds],
+                    )
 
-                        last_policy_loss = float(policy_loss.item())
-                        last_value_loss = float(value_loss.item())
-                        last_entropy = float(entropy_loss.item())
+                    log_ratio = new_logprob - b_logprobs[mb_inds]
+                    ratio = torch.exp(log_ratio)
 
-                policy_losses.append(last_policy_loss)
-                value_losses.append(last_value_loss)
-                entropies.append(last_entropy)
+                    mb_advantages = b_advantages[mb_inds]
+                    mb_advantages = (mb_advantages - mb_advantages.mean(dim=0, keepdim=True)) / (
+                        mb_advantages.std(dim=0, unbiased=False, keepdim=True) + 1e-8
+                    )
 
-            # Aggregate and persist metrics.
+                    policy_loss_1 = -mb_advantages * ratio
+                    policy_loss_2 = -mb_advantages * torch.clamp(
+                        ratio,
+                        1.0 - cfg.clip_coef,
+                        1.0 + cfg.clip_coef,
+                    )
+                    policy_loss_per_agent = torch.max(policy_loss_1, policy_loss_2).mean(dim=0)
+
+                    value_loss_per_agent = 0.5 * ((new_value - b_returns[mb_inds]) ** 2).mean(dim=0)
+                    entropy_per_agent = entropy.mean(dim=0)
+
+                    total_loss = (
+                        policy_loss_per_agent
+                        + cfg.vf_coef * value_loss_per_agent
+                        - cfg.ent_coef * entropy_per_agent
+                    ).sum()
+
+                    optimizer.zero_grad()
+                    total_loss.backward()
+                    nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+                    optimizer.step()
+
+                    last_policy_loss = float(policy_loss_per_agent.mean().item())
+                    last_value_loss = float(value_loss_per_agent.mean().item())
+                    last_entropy = float(entropy_per_agent.mean().item())
+
             episode_reward_mean = (
                 float(np.mean(iteration_episode_returns)) if iteration_episode_returns else None
             )
@@ -228,9 +341,10 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 "mode": "multi-agent-selfish",
                 "run_name": run_name,
                 "episode_reward_mean": episode_reward_mean,
-                "policy_loss": float(np.mean(policy_losses)) if policy_losses else None,
-                "value_loss": float(np.mean(value_losses)) if value_losses else None,
-                "entropy": float(np.mean(entropies)) if entropies else None,
+                "policy_loss": last_policy_loss,
+                "value_loss": last_value_loss,
+                "entropy": last_entropy,
+                "learning_rate": float(optimizer.param_groups[0]["lr"]),
             }
             training_history.append(metrics)
             results_writer.write(metrics)
@@ -243,6 +357,7 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                         f"policy_loss={metrics['policy_loss']}",
                         f"value_loss={metrics['value_loss']}",
                         f"entropy={metrics['entropy']}",
+                        f"lr={metrics['learning_rate']}",
                     ]
                 )
             )
@@ -251,10 +366,8 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_iter_{iteration:06d}.pt"
                 torch.save(
                     {
-                        "model_state_dicts": {agent_id: models[agent_id].state_dict() for agent_id in agent_ids},
-                        "optimizer_state_dicts": {
-                            agent_id: optimizers[agent_id].state_dict() for agent_id in agent_ids
-                        },
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
                         "config": asdict(cfg),
                         "iteration": iteration,
                     },
@@ -265,10 +378,8 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
         final_checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_final_iter_{cfg.stop_iters:06d}.pt"
         torch.save(
             {
-                "model_state_dicts": {agent_id: models[agent_id].state_dict() for agent_id in agent_ids},
-                "optimizer_state_dicts": {
-                    agent_id: optimizers[agent_id].state_dict() for agent_id in agent_ids
-                },
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
                 "config": asdict(cfg),
                 "iteration": cfg.stop_iters,
             },
@@ -280,7 +391,9 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
             "backend": "cleanrl",
             "mode": "multi-agent-selfish",
             "device": str(device),
-            "num_agents": cfg.num_agents,
+            "num_agents": num_agents,
+            "num_envs": cfg.num_envs,
+            "anneal_lr": cfg.anneal_lr,
             "run_name": run_name,
             "results_dir": str(results_dir),
             "iterations": cfg.stop_iters,

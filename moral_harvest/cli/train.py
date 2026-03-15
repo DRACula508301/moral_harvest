@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from moral_harvest.experiments.multi_agent_selfish_cleanrl import run_multi_agent_selfish_cleanrl
-from moral_harvest.experiments.multi_agent_selfish_rllib import run_vanilla_selfish_ippo
 from moral_harvest.experiments.single_agent_ppo_cleanrl import run_single_agent_cleanrl
 from moral_harvest.experiments.single_agent_ppo_rllib import run_single_agent_ppo
 from moral_harvest.training.config import SingleAgentTrainConfig
@@ -19,10 +18,11 @@ def parse_args() -> argparse.Namespace:
 
     # Environment and stopping controls.
     parser.add_argument("--mode", choices=["single-agent", "multi-agent-selfish"], default="single-agent")
-    parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="rllib")
+    parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="cleanrl")
     parser.add_argument("--substrate", default="commons_harvest__open")
     parser.add_argument("--focal-agent", default="player_0")
     parser.add_argument("--num-agents", type=int, default=10)
+    parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--stop-iters", type=int, default=1000)
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--checkpoint-root", default=None)
@@ -42,6 +42,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ent-coef", type=float, default=0.01)
     parser.add_argument("--vf-coef", type=float, default=0.5)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    parser.add_argument("--anneal-lr", dest="anneal_lr", action="store_true")
+    parser.add_argument("--no-anneal-lr", dest="anneal_lr", action="store_false")
+    parser.set_defaults(anneal_lr=True)
     parser.add_argument("--num-gpus", type=int, default=None, help="Optional override; default auto-detects GPU")
     parser.add_argument("--seed", type=int, default=None)
 
@@ -137,6 +140,7 @@ def main() -> None:
             substrate_name=args.substrate,
             focal_agent=args.focal_agent,
             num_agents=args.num_agents,
+            num_envs=args.num_envs,
             stop_iters=args.stop_iters,
             checkpoint_every=args.checkpoint_every,
             checkpoint_root=checkpoint_root,
@@ -153,6 +157,7 @@ def main() -> None:
             ent_coef=args.ent_coef,
             vf_coef=args.vf_coef,
             max_grad_norm=args.max_grad_norm,
+            anneal_lr=args.anneal_lr,
             num_gpus=args.num_gpus,
             seed=args.seed,
             include_ready_to_shoot=args.include_ready_to_shoot,
@@ -166,10 +171,10 @@ def main() -> None:
             output = run_single_agent_ppo(cfg)
         elif args.mode == "single-agent" and cfg.backend == "cleanrl":
             output = run_single_agent_cleanrl(cfg)
-        elif args.mode == "multi-agent-selfish" and cfg.backend == "rllib":
-            output = run_vanilla_selfish_ippo(cfg)
         elif args.mode == "multi-agent-selfish" and cfg.backend == "cleanrl":
             output = run_multi_agent_selfish_cleanrl(cfg)
+        elif args.mode == "multi-agent-selfish" and cfg.backend == "rllib":
+            raise ValueError("multi-agent-selfish with backend=rllib is deprecated. Use backend=cleanrl.")
         else:
             raise ValueError(f"Unsupported mode/backend combination: mode={args.mode}, backend={cfg.backend}")
         output = _auto_plot_training_curves(output)

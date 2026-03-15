@@ -15,7 +15,7 @@ from torch.distributions.categorical import Categorical
 
 from moral_harvest.envs.meltingpot_env import HarvestSingleAgentEnv
 from moral_harvest.envs.registry import register_environments
-from moral_harvest.experiments.single_agent_cleanrl import CleanRLCNNActorCritic
+from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
 
 
 # Parse CLI arguments for single-agent checkpoint rollout.
