@@ -1,1 +1,0 @@
-{"iteration": 1, "backend": "cleanrl", "run_name": "cleanrl_artifact_smoke", "episode_reward_mean": null, "policy_loss": -0.002528928220272064, "value_loss": 8.595906365371775e-06, "entropy": 2.078364372253418}

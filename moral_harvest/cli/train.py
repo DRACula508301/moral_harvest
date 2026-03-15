@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+from typing import Any
 
 from moral_harvest.experiments.multi_agent_selfish_cleanrl import run_multi_agent_selfish_cleanrl
-from moral_harvest.experiments.single_agent_cleanrl import run_single_agent_cleanrl
-from moral_harvest.experiments.single_agent_ppo import run_single_agent_ppo
-from moral_harvest.experiments.vanilla_selfish import run_vanilla_selfish_ippo
+from moral_harvest.experiments.multi_agent_selfish_rllib import run_vanilla_selfish_ippo
+from moral_harvest.experiments.single_agent_ppo_cleanrl import run_single_agent_cleanrl
+from moral_harvest.experiments.single_agent_ppo_rllib import run_single_agent_ppo
 from moral_harvest.training.config import SingleAgentTrainConfig
 
 
@@ -52,6 +54,66 @@ def parse_args() -> argparse.Namespace:
 
 
 # Entry point for running configured training modes.
+def _auto_plot_training_curves(output: dict[str, Any]) -> dict[str, Any]:
+    # Use training output directory to find persisted metrics.
+    results_dir_raw = output.get("results_dir")
+    if not isinstance(results_dir_raw, str) or not results_dir_raw:
+        output["plot_path"] = None
+        return output
+
+    results_dir = Path(results_dir_raw)
+    metrics_jsonl = results_dir / "metrics.jsonl"
+    metrics_csv = results_dir / "metrics.csv"
+    metrics_path = metrics_jsonl if metrics_jsonl.exists() else metrics_csv
+
+    if not metrics_path.exists():
+        output["plot_path"] = None
+        output["plot_error"] = f"Metrics file not found in {results_dir}"
+        return output
+
+    # Lazily import plotting utilities to keep training resilient.
+    try:
+        from moral_harvest.analysis.plot_training_curves import load_metrics, plot_curves
+    except Exception as exc:  # pragma: no cover
+        output["plot_path"] = None
+        output["plot_error"] = f"Plot utilities unavailable: {exc}"
+        return output
+
+    try:
+        rows = load_metrics(metrics_path)
+        if not rows:
+            output["plot_path"] = None
+            output["plot_error"] = "Metrics file contains no rows."
+            return output
+
+        metric_priority = ["episode_reward_mean", "policy_loss", "value_loss", "entropy"]
+        y_keys = [metric for metric in metric_priority if metric in rows[0]]
+        if not y_keys:
+            output["plot_path"] = None
+            output["plot_error"] = "No plottable metric keys found in metrics rows."
+            return output
+
+        plot_path = results_dir / "training_curves.png"
+        title_mode = output.get("mode", "training")
+        title_backend = output.get("backend", "backend")
+        title_run = output.get("run_name", "run")
+        plot_curves(
+            rows=rows,
+            x_key="iteration",
+            y_keys=y_keys,
+            output_path=plot_path,
+            title=f"{title_mode} | {title_backend} | {title_run}",
+        )
+        output["plot_path"] = str(plot_path)
+        print(f"plot_saved={plot_path}")
+        return output
+    except Exception as exc:  # pragma: no cover
+        output["plot_path"] = None
+        output["plot_error"] = f"Failed to generate plot: {exc}"
+        print(f"plot_skipped={exc}")
+        return output
+
+
 def main() -> None:
     # Parse arguments once and dispatch to the selected mode.
     args = parse_args()
@@ -110,6 +172,7 @@ def main() -> None:
             output = run_multi_agent_selfish_cleanrl(cfg)
         else:
             raise ValueError(f"Unsupported mode/backend combination: mode={args.mode}, backend={cfg.backend}")
+        output = _auto_plot_training_curves(output)
         print(json.dumps(output, indent=2, default=str))
 
 

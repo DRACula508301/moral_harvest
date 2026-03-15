@@ -11,7 +11,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from moral_harvest.envs.meltingpot_multiagent_env import HarvestMultiAgentEnv
-from moral_harvest.experiments.single_agent_cleanrl import (
+from moral_harvest.experiments.single_agent_ppo_cleanrl import (
     CleanRLCNNActorCritic,
     _compute_gae,
     _resolve_device,

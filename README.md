@@ -39,6 +39,7 @@ Notes:
 - Checkpoints are saved every `--checkpoint-every` iterations and once at the end.
 - Training logs print iteration reward and learner stats (`policy_loss`, `value_loss`, `entropy`).
 - Per-iteration metrics are saved under `results/single_agent/<backend>/<run_name>/` as both `metrics.jsonl` and `metrics.csv`.
+- Training now automatically saves `training_curves.png` in the same run directory at the end of each run.
 
 ### Evaluate a saved single-agent checkpoint
 
@@ -109,5 +110,6 @@ Notes:
 - Backend/device logs include selected mode, backend, and GPU allocation.
 - Per-iteration metrics are saved under `results/multi_agent/<backend>/<run_name>/`.
 - Checkpoints are saved under `checkpoints/multi_agent/selfish/`.
+- Training now automatically saves `training_curves.png` in the same run directory at the end of each run.
 
 To run CleanRL instead, add `--backend cleanrl`.
