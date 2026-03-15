@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class SingleAgentTrainConfig:
     # Training backend selection.
-    backend: str = "cleanrl"
+    backend: str = "rllib"
 
     # Environment selection.
     substrate_name: str = "commons_harvest__open"

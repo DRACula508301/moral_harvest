@@ -12,6 +12,9 @@ from shimmy import MeltingPotCompatibilityV0
 class HarvestMultiAgentEnv(MultiAgentEnv):
     # Initialize the multi-agent wrapper and per-agent spaces.
     def __init__(self, config: dict[str, Any] | None = None):
+        # Initialize RLlib MultiAgentEnv base state.
+        super().__init__()
+
         # Read wrapper config with defaults.
         config = config or {}
         self.substrate_name = config.get("substrate_name", "commons_harvest__open")
@@ -114,11 +117,17 @@ class HarvestMultiAgentEnv(MultiAgentEnv):
 
     # Advance one environment step with per-agent actions.
     def step(self, action_dict: dict[str, int]):
-        # Fill in no-op for any active agent without provided action.
+        # Read currently active agents from the underlying shimmy env.
+        underlying_agents = list(getattr(self._env, "agents", []))
+
+        # Fill in no-op for all underlying agents, then override controlled actions.
         joint_actions = {
-            agent_id: int(action_dict.get(agent_id, self.no_op_action))
-            for agent_id in self.agents
+            agent_id: self.no_op_action
+            for agent_id in underlying_agents
         }
+        for agent_id in self.possible_agents:
+            if agent_id in joint_actions and agent_id in action_dict:
+                joint_actions[agent_id] = int(action_dict[agent_id])
 
         observations, rewards, terminations, truncations, infos = self._env.step(joint_actions)
 

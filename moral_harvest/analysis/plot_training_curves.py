@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
+from pathlib import PureWindowsPath
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -59,6 +61,38 @@ def load_metrics(metrics_path: Path) -> list[dict[str, Any]]:
             return list(csv.DictReader(handle))
 
     raise ValueError("Unsupported metrics file format. Use .jsonl or .csv")
+
+
+def resolve_metrics_path(raw_path: str) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if candidate.exists():
+        return candidate
+
+    windows_style = re.match(r"^(?P<drive>[A-Za-z]):[\\/].+", raw_path)
+    if windows_style:
+        windows_path = PureWindowsPath(raw_path)
+        if windows_path.anchor:
+            drive = windows_path.drive[:-1].lower()
+            suffix_parts = windows_path.parts[1:]
+            wsl_path = Path("/mnt") / drive / Path(*suffix_parts)
+            if wsl_path.exists():
+                return wsl_path
+
+    return candidate
+
+
+def build_not_found_error(metrics_path: Path, raw_path: str) -> FileNotFoundError:
+    if re.match(r"^[A-Za-z]:[^\\/].+", raw_path):
+        return FileNotFoundError(
+            "Metrics file not found: "
+            f"{metrics_path}\n"
+            "Tip: your shell consumed Windows backslashes. In WSL/bash, pass one of:\n"
+            "  --metrics-path '/mnt/c/Users/.../metrics.jsonl'\n"
+            "  --metrics-path 'C:/Users/.../metrics.jsonl'\n"
+            "  --metrics-path 'C:\\\\Users\\\\...\\\\metrics.jsonl'"
+        )
+
+    return FileNotFoundError(f"Metrics file not found: {metrics_path}")
 
 
 # Render and save training curves for selected metrics.
@@ -120,9 +154,9 @@ def plot_curves(
 def main() -> None:
     # Parse args and validate metrics file path.
     args = parse_args()
-    metrics_path = Path(args.metrics_path)
+    metrics_path = resolve_metrics_path(args.metrics_path)
     if not metrics_path.exists():
-        raise FileNotFoundError(f"Metrics file not found: {metrics_path}")
+        raise build_not_found_error(metrics_path, args.metrics_path)
 
     # Load rows and determine output image path.
     rows = load_metrics(metrics_path)

@@ -1,6 +1,8 @@
 reference_code/
 .github/prompts/
 checkpoints/
+results/*
+videos/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

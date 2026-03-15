@@ -8,8 +8,8 @@ The current runnable path is a **single PPO focal agent** in `commons_harvest__o
 The wrapper keeps only local observations (`RGB` by default) and assigns no-op actions to all non-focal agents.
 
 Both backends are available:
-- `cleanrl` (default): CleanRL PPO implementation.
-- `rllib`: RLlib PPO implementation.
+- `rllib` (default): RLlib PPO implementation.
+- `cleanrl`: CleanRL PPO implementation.
 
 ### Run from WSL using `.venv-linux`
 
@@ -84,3 +84,30 @@ cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && .venv-linux/bin/python
 Optional:
 - Set `--output-path` to control where the PNG is saved.
 - Set `--x-key` if using a custom horizontal-axis metric.
+- In WSL/bash, avoid unescaped Windows backslashes in `--metrics-path`; use `/mnt/c/...`, `C:/...`, or double-escaped backslashes.
+
+## Multi-agent selfish IPPO (Step 2)
+
+This mode trains distinct policies (one per agent) in a shared Harvest environment.
+Current support:
+- Backend: `rllib` (default) and `cleanrl`.
+- Policy mapping: each `player_i` maps to `policy_player_i`.
+
+### Run from WSL using `.venv-linux`
+
+From Windows PowerShell:
+
+```powershell
+wsl
+```
+
+```bash
+cd /mnt/c/Users/dchen/Documents/Projects/moral_harvest && .venv-linux/bin/python -m moral_harvest.cli.train --mode multi-agent-selfish --num-agents 10 --substrate commons_harvest__open --stop-iters 300 --checkpoint-every 100 --checkpoint-root checkpoints/multi_agent/selfish --results-root results/multi_agent --run-name selfish_10_agents
+```
+
+Notes:
+- Backend/device logs include selected mode, backend, and GPU allocation.
+- Per-iteration metrics are saved under `results/multi_agent/<backend>/<run_name>/`.
+- Checkpoints are saved under `checkpoints/multi_agent/selfish/`.
+
+To run CleanRL instead, add `--backend cleanrl`.
