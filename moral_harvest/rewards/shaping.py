@@ -122,10 +122,17 @@ class RewardShaper:
         shaping_rewards, step_metrics = self.compute_shaping_rewards(own_rewards=own_rewards, infos=infos)
         shaped_rewards = self.combine_rewards(own_rewards=own_rewards, shaping_rewards=shaping_rewards)
 
-        own_reward_mean = float(sum(own_rewards.values()) / max(len(own_rewards), 1))
-        shaped_reward_mean = float(sum(shaped_rewards.values()) / max(len(shaped_rewards), 1))
+        own_reward_sum = float(sum(own_rewards.values()))
+        shaping_reward_sum = float(sum(shaping_rewards.values()))
+        shaped_reward_sum = float(sum(shaped_rewards.values()))
+
+        own_reward_mean = float(own_reward_sum / max(len(own_rewards), 1))
+        shaped_reward_mean = float(shaped_reward_sum / max(len(shaped_rewards), 1))
         step_metrics["own_reward_mean"] = own_reward_mean
         step_metrics["shaped_reward_mean"] = shaped_reward_mean
+        step_metrics["own_reward_sum"] = own_reward_sum
+        step_metrics["shaping_reward_sum"] = shaping_reward_sum
+        step_metrics["shaped_reward_sum"] = shaped_reward_sum
 
         return shaped_rewards, step_metrics
 

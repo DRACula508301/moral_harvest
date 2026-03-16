@@ -14,6 +14,10 @@ from shimmy import MeltingPotCompatibilityV0
 from moral_harvest.experiments.single_agent_ppo_cleanrl import _resolve_device
 from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
 from moral_harvest.training.config import SingleAgentTrainConfig
+from moral_harvest.training.env_metrics import (
+    count_active_berries_from_world_frame,
+    extract_world_rgb_frames,
+)
 from moral_harvest.training.results_logger import IterationResultsWriter
 
 
@@ -209,6 +213,11 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 optimizer.param_groups[0]["lr"] = frac * cfg.lr
 
             iteration_episode_returns: list[float] = []
+            apple_reward_total = 0.0
+            shaping_reward_total = 0.0
+            berry_observation_steps = 0
+            active_berries_total = 0.0
+            berries_end_by_env = [0 for _ in range(cfg.num_envs)]
 
             for step in range(rollout_steps):
                 obs_buffer[step] = next_obs
@@ -230,6 +239,7 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                     dtype=torch.float32,
                     device=device,
                 )
+                apple_reward_total += float(next_rewards.sum().item())
                 next_terminations = torch.tensor(
                     _reshape_flat_by_agent(
                         np.asarray(termination_raw, dtype=np.float32), cfg.num_envs, num_agents
@@ -247,6 +257,22 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                     dtype=torch.float32,
                     device=device,
                 )
+
+                world_rgb_frames = extract_world_rgb_frames(
+                    next_obs_raw=next_obs_raw,
+                    num_envs=cfg.num_envs,
+                    num_agents=num_agents,
+                )
+                if not world_rgb_frames and cfg.num_envs == 1:
+                    rendered_frame = base_env.render()
+                    if isinstance(rendered_frame, np.ndarray):
+                        world_rgb_frames = [rendered_frame]
+                for env_index, world_frame in enumerate(world_rgb_frames):
+                    berry_count = count_active_berries_from_world_frame(world_frame, sprite_size=8)
+                    berry_observation_steps += 1
+                    active_berries_total += float(berry_count)
+                    if env_index < cfg.num_envs:
+                        berries_end_by_env[env_index] = berry_count
 
                 rewards_buffer[step] = next_rewards
 
@@ -362,6 +388,38 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
             episode_reward_mean = (
                 float(np.mean(iteration_episode_returns)) if iteration_episode_returns else None
             )
+            total_reward_total = apple_reward_total
+            rollout_env_steps = float(rollout_steps * cfg.num_envs)
+            apple_reward_mean_per_env_step = apple_reward_total / rollout_env_steps
+            shaping_reward_mean_per_env_step = 0.0
+            total_reward_mean_per_env_step = total_reward_total / rollout_env_steps
+
+            total_berries_end = int(sum(berries_end_by_env)) if berry_observation_steps > 0 else None
+            total_berries_end_mean_env = (
+                float(total_berries_end / max(cfg.num_envs, 1))
+                if total_berries_end is not None
+                else None
+            )
+            avg_active_berries_per_env_step = (
+                float(active_berries_total / berry_observation_steps)
+                if berry_observation_steps > 0
+                else None
+            )
+            apples_eaten_per_env_step = (
+                float(apple_reward_total / berry_observation_steps)
+                if berry_observation_steps > 0
+                else None
+            )
+            berry_lifetime_steps_estimate = (
+                float(avg_active_berries_per_env_step / apples_eaten_per_env_step)
+                if (
+                    avg_active_berries_per_env_step is not None
+                    and apples_eaten_per_env_step is not None
+                    and apples_eaten_per_env_step > 0.0
+                )
+                else None
+            )
+
             metrics = {
                 "iteration": iteration,
                 "backend": "cleanrl",
@@ -375,6 +433,17 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 "kl_stopped": kl_stopped,
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
                 "normalize_rgb": cfg.normalize_rgb,
+                "apple_reward_total": apple_reward_total,
+                "shaping_reward_total": shaping_reward_total,
+                "total_reward_total": total_reward_total,
+                "apple_reward_mean_per_env_step": apple_reward_mean_per_env_step,
+                "shaping_reward_mean_per_env_step": shaping_reward_mean_per_env_step,
+                "total_reward_mean_per_env_step": total_reward_mean_per_env_step,
+                "total_berries_end": total_berries_end,
+                "total_berries_end_mean_env": total_berries_end_mean_env,
+                "avg_active_berries_per_env_step": avg_active_berries_per_env_step,
+                "berry_lifetime_steps_estimate": berry_lifetime_steps_estimate,
+                "berry_observation_steps": berry_observation_steps,
             }
             training_history.append(metrics)
             results_writer.write(metrics)

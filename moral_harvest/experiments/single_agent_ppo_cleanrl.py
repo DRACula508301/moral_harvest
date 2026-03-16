@@ -116,6 +116,7 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
         # Main update loop: collect rollout -> optimize PPO -> checkpoint.
         for iteration in range(1, cfg.stop_iters + 1):
             iteration_episode_returns: list[float] = []
+            apple_reward_total = 0.0
 
             # Collect one rollout batch.
             for step in range(rollout_steps):
@@ -133,6 +134,7 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
                 rewards_buffer[step] = float(reward)
                 dones_buffer[step] = float(done)
                 values_buffer[step] = value.squeeze(0)
+                apple_reward_total += float(reward)
 
                 episode_return += float(reward)
                 if done:
@@ -206,6 +208,12 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
             episode_reward_mean = (
                 float(np.mean(iteration_episode_returns)) if iteration_episode_returns else None
             )
+            shaping_reward_total = 0.0
+            total_reward_total = apple_reward_total
+            apple_reward_mean_per_env_step = apple_reward_total / max(rollout_steps, 1)
+            shaping_reward_mean_per_env_step = 0.0
+            total_reward_mean_per_env_step = total_reward_total / max(rollout_steps, 1)
+
             metrics = {
                 "iteration": iteration,
                 "backend": cfg.backend,
@@ -214,6 +222,17 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
                 "policy_loss": last_policy_loss,
                 "value_loss": last_value_loss,
                 "entropy": last_entropy,
+                "apple_reward_total": apple_reward_total,
+                "shaping_reward_total": shaping_reward_total,
+                "total_reward_total": total_reward_total,
+                "apple_reward_mean_per_env_step": apple_reward_mean_per_env_step,
+                "shaping_reward_mean_per_env_step": shaping_reward_mean_per_env_step,
+                "total_reward_mean_per_env_step": total_reward_mean_per_env_step,
+                "total_berries_end": None,
+                "total_berries_end_mean_env": None,
+                "avg_active_berries_per_env_step": None,
+                "berry_lifetime_steps_estimate": None,
+                "berry_observation_steps": 0,
             }
             training_history.append(metrics)
             results_writer.write(metrics)
