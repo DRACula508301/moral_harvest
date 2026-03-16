@@ -6,6 +6,14 @@ import torch.nn as nn
 from torch.distributions.categorical import Categorical
 
 
+# Apply orthogonal initialization to Conv/Linear layers.
+def layer_init(layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0) -> nn.Module:
+    if isinstance(layer, (nn.Conv2d, nn.Linear)):
+        nn.init.orthogonal_(layer.weight, std)
+        nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
 # Build a Torch CNN+MLP actor-critic for RGB observations.
 class CleanRLCNNActorCritic(nn.Module):
     # Initialize convolutional encoder and actor/critic heads.
@@ -24,11 +32,13 @@ class CleanRLCNNActorCritic(nn.Module):
         for out_channels, kernel, stride in conv_filters:
             kernel_size = tuple(kernel)
             conv_layers.append(
-                nn.Conv2d(
-                    in_channels=in_channels,
-                    out_channels=int(out_channels),
-                    kernel_size=kernel_size,
-                    stride=int(stride),
+                layer_init(
+                    nn.Conv2d(
+                        in_channels=in_channels,
+                        out_channels=int(out_channels),
+                        kernel_size=kernel_size,
+                        stride=int(stride),
+                    )
                 )
             )
             conv_layers.append(nn.ReLU())
@@ -44,14 +54,14 @@ class CleanRLCNNActorCritic(nn.Module):
         mlp_layers: list[nn.Module] = []
         current_size = conv_out_size
         for hidden_size in fcnet_hiddens:
-            mlp_layers.append(nn.Linear(current_size, int(hidden_size)))
+            mlp_layers.append(layer_init(nn.Linear(current_size, int(hidden_size))))
             mlp_layers.append(nn.ReLU())
             current_size = int(hidden_size)
         self.trunk = nn.Sequential(*mlp_layers)
 
         # Build separate policy and value heads.
-        self.actor = nn.Linear(current_size, action_dim)
-        self.critic = nn.Linear(current_size, 1)
+        self.actor = layer_init(nn.Linear(current_size, action_dim), std=0.01)
+        self.critic = layer_init(nn.Linear(current_size, 1), std=1.0)
 
     # Encode observations and produce action logits plus state value.
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

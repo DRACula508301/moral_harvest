@@ -11,95 +11,57 @@ import torch.nn as nn
 import torch.optim as optim
 from shimmy import MeltingPotCompatibilityV0
 
+from moral_harvest.experiments.multi_agent_selfish_cleanrl import (
+    MultiAgentCleanRLCNN,
+    _normalize_rgb,
+    _reshape_flat_by_agent,
+)
 from moral_harvest.experiments.single_agent_ppo_cleanrl import _resolve_device
-from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
+from moral_harvest.rewards.shaping import RewardShaper, RewardShapingConfig
 from moral_harvest.training.config import SingleAgentTrainConfig
 from moral_harvest.training.results_logger import IterationResultsWriter
 
 
-# Stack one independent policy/value submodule per agent under one nn.Module.
-class MultiAgentCleanRLCNN(nn.Module):
-    # Build per-agent actor-critic modules with shared architecture.
-    def __init__(
-        self,
-        num_agents: int,
-        obs_shape: tuple[int, int, int],
-        action_dim: int,
-        conv_filters: list[list[int | list[int]]],
-        fcnet_hiddens: list[int],
-    ):
-        super().__init__()
-        self.num_agents = num_agents
-        self.agents = nn.ModuleList(
-            [
-                CleanRLCNNActorCritic(
-                    obs_shape=obs_shape,
-                    action_dim=action_dim,
-                    conv_filters=conv_filters,
-                    fcnet_hiddens=fcnet_hiddens,
-                )
-                for _ in range(num_agents)
-            ]
+SUPPORTED_REWARD_TYPES = ("selfish", "utilitarian", "deontological", "virtue")
+
+
+# Return selected reward types from CLI/config selection.
+def _resolve_reward_types(reward_type: str) -> list[str]:
+    if reward_type == "all":
+        return ["utilitarian", "deontological", "virtue"]
+    if reward_type not in SUPPORTED_REWARD_TYPES:
+        raise ValueError(
+            f"Unsupported reward type '{reward_type}'. Expected one of {SUPPORTED_REWARD_TYPES} or 'all'."
         )
-
-    # Predict values for all agents for a batch of observations.
-    def get_values(self, obs: torch.Tensor) -> torch.Tensor:
-        values = []
-        for agent_index in range(self.num_agents):
-            _, value = self.agents[agent_index].forward(obs[:, agent_index])
-            values.append(value)
-        return torch.stack(values, dim=1)
-
-    # Sample/evaluate actions and values for all agents.
-    def get_actions_and_values(
-        self,
-        obs: torch.Tensor,
-        actions: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        out_actions = []
-        out_logprobs = []
-        out_entropies = []
-        out_values = []
-
-        for agent_index in range(self.num_agents):
-            agent_obs = obs[:, agent_index]
-            agent_actions = actions[:, agent_index] if actions is not None else None
-            sampled_action, logprob, entropy, value = self.agents[agent_index].get_action_and_value(
-                agent_obs,
-                agent_actions,
-            )
-            out_actions.append(sampled_action)
-            out_logprobs.append(logprob)
-            out_entropies.append(entropy)
-            out_values.append(value)
-
-        return (
-            torch.stack(out_actions, dim=1),
-            torch.stack(out_logprobs, dim=1),
-            torch.stack(out_entropies, dim=1),
-            torch.stack(out_values, dim=1),
-        )
+    return [reward_type]
 
 
-# Ensure observation tensors are float32 and optionally normalized to [0, 1].
-def _normalize_rgb(observations: np.ndarray, enabled: bool) -> np.ndarray:
-    observations_f32 = observations.astype(np.float32)
-    if enabled:
-        return observations_f32 / 255.0
-    return observations_f32
-
-
-# Reshape flattened [num_envs * num_agents, ...] arrays to [num_envs, num_agents, ...].
-def _reshape_flat_by_agent(
-    values: np.ndarray,
+# Reshape vector-env infos into [num_envs][num_agents] dictionaries.
+def _reshape_infos_by_agent(
+    info_raw: Any,
     num_envs: int,
     num_agents: int,
-) -> np.ndarray:
-    return values.reshape(num_envs, num_agents, *values.shape[1:])
+) -> list[list[dict[str, Any]]]:
+    reshaped = [[{} for _ in range(num_agents)] for _ in range(num_envs)]
+
+    if isinstance(info_raw, (list, tuple)) and len(info_raw) == num_envs * num_agents:
+        for flat_index, info in enumerate(info_raw):
+            env_index = flat_index // num_agents
+            agent_index = flat_index % num_agents
+            reshaped[env_index][agent_index] = info if isinstance(info, dict) else {}
+        return reshaped
+
+    if isinstance(info_raw, dict):
+        return reshaped
+
+    return reshaped
 
 
-# Train vanilla selfish IPPO with one optimizer and summed per-agent losses.
-def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
+# Run reward-shaped multi-agent CleanRL training for one reward type.
+def _run_single_reward_type(
+    cfg: SingleAgentTrainConfig,
+    reward_type: str,
+) -> dict[str, Any]:
     if cfg.include_ready_to_shoot:
         raise ValueError(
             "CleanRL backend currently supports RGB-only observations. Omit --include-ready-to-shoot."
@@ -115,7 +77,6 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
             "SuperSuit is required for multi-agent CleanRL vectorization. Install dependency 'supersuit'."
         ) from exc
 
-    # Build vectorized PettingZoo-compatible environment through SuperSuit wrappers.
     base_env = MeltingPotCompatibilityV0(substrate_name=cfg.substrate_name, render_mode="rgb_array")
     env = ss.pettingzoo_env_to_vec_env_v1(base_env)
     env = ss.concat_vec_envs_v1(
@@ -128,13 +89,21 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
     agent_ids = list(getattr(base_env, "possible_agents", [f"player_{index}" for index in range(cfg.num_agents)]))
     num_agents = len(agent_ids)
 
-    # Infer spaces from vectorized env.
     obs_shape = env.observation_space["RGB"].shape
     action_dim = int(env.action_space.n)
 
     device = _resolve_device(cfg.num_gpus)
     print(
-        f"backend=cleanrl | mode=multi-agent-selfish | device={device} | num_envs={cfg.num_envs} | anneal_lr={cfg.anneal_lr} | normalize_rgb={cfg.normalize_rgb} | clip_vloss={cfg.clip_vloss} | target_kl={cfg.target_kl}"
+        " | ".join(
+            [
+                "backend=cleanrl",
+                "mode=multi-agent-reward-shaped",
+                f"reward_type={reward_type}",
+                f"device={device}",
+                f"num_envs={cfg.num_envs}",
+                f"alpha={cfg.reward_alpha}",
+            ]
+        )
     )
 
     model = MultiAgentCleanRLCNN(
@@ -146,6 +115,18 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
     ).to(device)
     optimizer = optim.Adam(model.parameters(), lr=cfg.lr, eps=1e-5)
 
+    shapers = [
+        RewardShaper(
+            RewardShapingConfig(
+                reward_type=reward_type,
+                alpha=cfg.reward_alpha,
+                deontological_max_bonus=cfg.deontological_max_bonus,
+                virtue_scale=cfg.virtue_scale,
+            )
+        )
+        for _ in range(cfg.num_envs)
+    ]
+
     reset_obs, _ = env.reset(seed=cfg.seed)
     next_obs = torch.tensor(
         _reshape_flat_by_agent(_normalize_rgb(reset_obs["RGB"], cfg.normalize_rgb), cfg.num_envs, num_agents),
@@ -155,10 +136,11 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
     next_terminations = torch.zeros((cfg.num_envs, num_agents), dtype=torch.float32, device=device)
     next_truncations = torch.zeros((cfg.num_envs, num_agents), dtype=torch.float32, device=device)
 
-    checkpoint_root = Path(cfg.checkpoint_root).resolve()
+    checkpoint_root = Path(cfg.checkpoint_root).resolve() / reward_type
     checkpoint_root.mkdir(parents=True, exist_ok=True)
 
-    run_name = cfg.run_name or f"cleanrl_multi_agent_selfish_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    base_run_name = cfg.run_name or f"cleanrl_multi_agent_reward_shaped_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_name = f"{base_run_name}_{reward_type}"
     results_dir = Path(cfg.results_root).resolve() / "cleanrl" / run_name
     results_writer = IterationResultsWriter(results_dir)
 
@@ -209,6 +191,15 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 optimizer.param_groups[0]["lr"] = frac * cfg.lr
 
             iteration_episode_returns: list[float] = []
+            shaping_metric_values: dict[str, list[float]] = {
+                "own_reward_mean": [],
+                "shaped_reward_mean": [],
+                "shaping_reward_mean": [],
+                "utilitarian_mean_reward": [],
+                "deontological_bonus_mean": [],
+                "virtue_current_gini": [],
+                "virtue_delta_gini": [],
+            }
 
             for step in range(rollout_steps):
                 obs_buffer[step] = next_obs
@@ -223,10 +214,38 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 values_buffer[step] = value
 
                 flat_actions = action.reshape(-1).cpu().numpy()
-                next_obs_raw, reward_raw, termination_raw, truncation_raw, _ = env.step(flat_actions)
+                next_obs_raw, reward_raw, termination_raw, truncation_raw, info_raw = env.step(flat_actions)
+
+                own_rewards_np = _reshape_flat_by_agent(
+                    np.asarray(reward_raw, dtype=np.float32),
+                    cfg.num_envs,
+                    num_agents,
+                )
+                infos_by_env = _reshape_infos_by_agent(info_raw, cfg.num_envs, num_agents)
+
+                shaped_rewards_np = np.zeros_like(own_rewards_np, dtype=np.float32)
+                for env_index in range(cfg.num_envs):
+                    own_rewards_dict = {
+                        agent_ids[agent_index]: float(own_rewards_np[env_index, agent_index])
+                        for agent_index in range(num_agents)
+                    }
+                    env_infos = {
+                        agent_ids[agent_index]: infos_by_env[env_index][agent_index]
+                        for agent_index in range(num_agents)
+                    }
+                    shaped_rewards_dict, step_metrics = shapers[env_index].shape_step(
+                        own_rewards=own_rewards_dict,
+                        infos=env_infos,
+                    )
+                    for agent_index, agent_id in enumerate(agent_ids):
+                        shaped_rewards_np[env_index, agent_index] = float(shaped_rewards_dict[agent_id])
+
+                    for metric_name, metric_value in step_metrics.items():
+                        if metric_name in shaping_metric_values and metric_value is not None:
+                            shaping_metric_values[metric_name].append(float(metric_value))
 
                 next_rewards = torch.tensor(
-                    _reshape_flat_by_agent(np.asarray(reward_raw, dtype=np.float32), cfg.num_envs, num_agents),
+                    shaped_rewards_np,
                     dtype=torch.float32,
                     device=device,
                 )
@@ -256,6 +275,7 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 for env_index in done_env_indices.tolist():
                     iteration_episode_returns.append(float(episode_returns[env_index].mean().item()))
                     episode_returns[env_index] = 0.0
+                    shapers[env_index].reset_episode()
 
             with torch.no_grad():
                 next_values = model.get_values(next_obs)
@@ -362,10 +382,17 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
             episode_reward_mean = (
                 float(np.mean(iteration_episode_returns)) if iteration_episode_returns else None
             )
+
+            shaping_metrics_mean = {
+                metric_name: (float(np.mean(values)) if values else None)
+                for metric_name, values in shaping_metric_values.items()
+            }
+
             metrics = {
                 "iteration": iteration,
                 "backend": "cleanrl",
-                "mode": "multi-agent-selfish",
+                "mode": "multi-agent-reward-shaped",
+                "reward_type": reward_type,
                 "run_name": run_name,
                 "episode_reward_mean": episode_reward_mean,
                 "policy_loss": last_policy_loss,
@@ -376,6 +403,7 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
                 "normalize_rgb": cfg.normalize_rgb,
             }
+            metrics.update(shaping_metrics_mean)
             training_history.append(metrics)
             results_writer.write(metrics)
 
@@ -383,35 +411,37 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                 " | ".join(
                     [
                         f"iter={iteration}",
+                        f"reward_type={reward_type}",
                         f"reward={metrics['episode_reward_mean']}",
                         f"policy_loss={metrics['policy_loss']}",
                         f"value_loss={metrics['value_loss']}",
                         f"entropy={metrics['entropy']}",
-                        f"lr={metrics['learning_rate']}",
                     ]
                 )
             )
 
             if iteration % cfg.checkpoint_every == 0:
-                checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_iter_{iteration:06d}.pt"
+                checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_{reward_type}_iter_{iteration:06d}.pt"
                 torch.save(
                     {
                         "model_state_dict": model.state_dict(),
                         "optimizer_state_dict": optimizer.state_dict(),
                         "config": asdict(cfg),
                         "iteration": iteration,
+                        "reward_type": reward_type,
                     },
                     checkpoint_path,
                 )
                 print(f"checkpoint_saved={checkpoint_path}")
 
-        final_checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_final_iter_{cfg.stop_iters:06d}.pt"
+        final_checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_{reward_type}_final_iter_{cfg.stop_iters:06d}.pt"
         torch.save(
             {
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "config": asdict(cfg),
                 "iteration": cfg.stop_iters,
+                "reward_type": reward_type,
             },
             final_checkpoint_path,
         )
@@ -419,12 +449,11 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
         return {
             "status": "completed",
             "backend": "cleanrl",
-            "mode": "multi-agent-selfish",
+            "mode": "multi-agent-reward-shaped",
+            "reward_type": reward_type,
             "device": str(device),
             "num_agents": num_agents,
             "num_envs": cfg.num_envs,
-            "anneal_lr": cfg.anneal_lr,
-            "normalize_rgb": cfg.normalize_rgb,
             "run_name": run_name,
             "results_dir": str(results_dir),
             "iterations": cfg.stop_iters,
@@ -434,3 +463,20 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
     finally:
         results_writer.close()
         env.close()
+
+
+# Run reward-shaped training for one reward type or all configured types.
+def run_reward_shaped_shared_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
+    reward_types = _resolve_reward_types(cfg.reward_type)
+    outputs = [_run_single_reward_type(cfg, reward_type=reward_type) for reward_type in reward_types]
+
+    if len(outputs) == 1:
+        return outputs[0]
+
+    return {
+        "status": "completed",
+        "backend": "cleanrl",
+        "mode": "multi-agent-reward-shaped",
+        "reward_types": reward_types,
+        "runs": outputs,
+    }

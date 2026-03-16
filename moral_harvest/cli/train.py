@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from moral_harvest.experiments.multi_agent_selfish_cleanrl import run_multi_agent_selfish_cleanrl
+from moral_harvest.experiments.reward_shaped_shared import run_reward_shaped_shared_cleanrl
 from moral_harvest.experiments.single_agent_ppo_cleanrl import run_single_agent_cleanrl
-from moral_harvest.experiments.single_agent_ppo_rllib import run_single_agent_ppo
 from moral_harvest.training.config import SingleAgentTrainConfig
 
 
@@ -17,7 +17,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Moral Harvest training CLI")
 
     # Environment and stopping controls.
-    parser.add_argument("--mode", choices=["single-agent", "multi-agent-selfish"], default="single-agent")
+    parser.add_argument(
+        "--mode",
+        choices=["single-agent", "multi-agent-selfish", "multi-agent-reward-shaped"],
+        default="single-agent",
+    )
     parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="cleanrl")
     parser.add_argument("--substrate", default="commons_harvest__open")
     parser.add_argument("--focal-agent", default="player_0")
@@ -28,6 +32,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-root", default=None)
     parser.add_argument("--results-root", default=None)
     parser.add_argument("--run-name", default=None)
+    parser.add_argument(
+        "--reward-type",
+        choices=["selfish", "utilitarian", "deontological", "virtue", "all"],
+        default="utilitarian",
+    )
+    parser.add_argument("--reward-alpha", type=float, default=0.5)
+    parser.add_argument("--deontological-max-bonus", type=float, default=1.0)
+    parser.add_argument("--virtue-scale", type=float, default=1.0)
 
     # PPO optimization hyperparameters.
     parser.add_argument("--num-env-runners", type=int, default=0)
@@ -39,12 +51,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip-coef", type=float, default=0.2)
+    parser.add_argument("--clip-vloss", dest="clip_vloss", action="store_true")
+    parser.add_argument("--no-clip-vloss", dest="clip_vloss", action="store_false")
+    parser.set_defaults(clip_vloss=True)
     parser.add_argument("--ent-coef", type=float, default=0.01)
     parser.add_argument("--vf-coef", type=float, default=0.5)
+    parser.add_argument("--target-kl", type=float, default=None)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--anneal-lr", dest="anneal_lr", action="store_true")
     parser.add_argument("--no-anneal-lr", dest="anneal_lr", action="store_false")
     parser.set_defaults(anneal_lr=True)
+    parser.add_argument("--normalize-rgb", dest="normalize_rgb", action="store_true")
+    parser.add_argument("--no-normalize-rgb", dest="normalize_rgb", action="store_false")
+    parser.set_defaults(normalize_rgb=True)
     parser.add_argument("--num-gpus", type=int, default=None, help="Optional override; default auto-detects GPU")
     parser.add_argument("--seed", type=int, default=None)
 
@@ -126,14 +145,20 @@ def main() -> None:
         checkpoint_root = (
             "checkpoints/multi_agent/selfish"
             if args.mode == "multi-agent-selfish"
+            else "checkpoints"
+            if args.mode == "multi-agent-reward-shaped"
             else "checkpoints/single_agent"
         )
 
     results_root = args.results_root
     if results_root is None:
-        results_root = "results/multi_agent" if args.mode == "multi-agent-selfish" else "results/single_agent"
+        results_root = (
+            "results/multi_agent"
+            if args.mode in {"multi-agent-selfish", "multi-agent-reward-shaped"}
+            else "results/single_agent"
+        )
 
-    if args.mode in {"single-agent", "multi-agent-selfish"}:
+    if args.mode in {"single-agent", "multi-agent-selfish", "multi-agent-reward-shaped"}:
         # Translate CLI args into a strongly-typed training config.
         cfg = SingleAgentTrainConfig(
             backend=args.backend,
@@ -154,14 +179,21 @@ def main() -> None:
             gamma=args.gamma,
             gae_lambda=args.gae_lambda,
             clip_coef=args.clip_coef,
+            clip_vloss=args.clip_vloss,
             ent_coef=args.ent_coef,
             vf_coef=args.vf_coef,
+            target_kl=args.target_kl,
             max_grad_norm=args.max_grad_norm,
             anneal_lr=args.anneal_lr,
+            normalize_rgb=args.normalize_rgb,
             num_gpus=args.num_gpus,
             seed=args.seed,
             include_ready_to_shoot=args.include_ready_to_shoot,
             no_op_action=args.no_op_action,
+            reward_type=args.reward_type,
+            reward_alpha=args.reward_alpha,
+            deontological_max_bonus=args.deontological_max_bonus,
+            virtue_scale=args.virtue_scale,
         )
         # Log backend selection for traceability.
         print(f"mode={args.mode} | backend={cfg.backend}")
@@ -173,8 +205,12 @@ def main() -> None:
             output = run_single_agent_cleanrl(cfg)
         elif args.mode == "multi-agent-selfish" and cfg.backend == "cleanrl":
             output = run_multi_agent_selfish_cleanrl(cfg)
+        elif args.mode == "multi-agent-reward-shaped" and cfg.backend == "cleanrl":
+            output = run_reward_shaped_shared_cleanrl(cfg)
         elif args.mode == "multi-agent-selfish" and cfg.backend == "rllib":
             raise ValueError("multi-agent-selfish with backend=rllib is deprecated. Use backend=cleanrl.")
+        elif args.mode == "multi-agent-reward-shaped" and cfg.backend == "rllib":
+            raise ValueError("multi-agent-reward-shaped with backend=rllib is deprecated. Use backend=cleanrl.")
         else:
             raise ValueError(f"Unsupported mode/backend combination: mode={args.mode}, backend={cfg.backend}")
         output = _auto_plot_training_curves(output)

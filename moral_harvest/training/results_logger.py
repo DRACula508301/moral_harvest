@@ -16,6 +16,7 @@ class IterationResultsWriter:
         self.jsonl_path = self.output_dir / "metrics.jsonl"
         self.csv_path = self.output_dir / "metrics.csv"
 
+        self._jsonl_file = self.jsonl_path.open("w", encoding="utf-8")
         self._csv_file = self.csv_path.open("w", newline="", encoding="utf-8")
         self._csv_writer: csv.DictWriter[str] | None = None
         self._fieldnames: list[str] | None = None
@@ -23,8 +24,8 @@ class IterationResultsWriter:
     # Append one metrics record to both JSONL and CSV files.
     def write(self, row: dict[str, Any]) -> None:
         # Write JSONL record (one JSON object per line).
-        with self.jsonl_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, default=str) + "\n")
+        self._jsonl_file.write(json.dumps(row, default=str) + "\n")
+        self._jsonl_file.flush()
 
         # Initialize CSV writer on first row and write header.
         if self._csv_writer is None:
@@ -41,4 +42,5 @@ class IterationResultsWriter:
 
     # Close any open file handles.
     def close(self) -> None:
+        self._jsonl_file.close()
         self._csv_file.close()

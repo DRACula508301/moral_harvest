@@ -24,28 +24,31 @@ class SingleAgentTrainConfig:
     # Rollout/optimizer settings.
     num_env_runners: int = 0
     train_batch_size: int = 4000
-    minibatch_size: int = 256
+    minibatch_size: int = 512
     num_epochs: int = 10
     lr: float = 3e-4
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_coef: float = 0.2
+    clip_vloss: bool = True
     ent_coef: float = 0.01
     vf_coef: float = 0.5
+    target_kl: float | None = None
     max_grad_norm: float = 0.5
     anneal_lr: bool = True
-    num_envs: int = 1
+    num_envs: int = 2
+    normalize_rgb: bool = True
 
     # CNN/MLP model settings for 88x88x3 Harvest observations.
     conv_filters: list[list[int | list[int]]] = field(
         default_factory=lambda: [
-            [16, [8, 8], 4],
+            [32, [8, 8], 4],
             [32, [4, 4], 2],
             [64, [3, 3], 1],
         ]
     )
     conv_activation: str = "relu"
-    fcnet_hiddens: list[int] = field(default_factory=lambda: [256, 256])
+    fcnet_hiddens: list[int] = field(default_factory=lambda: [512, 512])
     fcnet_activation: str = "relu"
 
     # Runtime framework/resources.
@@ -56,3 +59,9 @@ class SingleAgentTrainConfig:
     # Wrapper-specific controls.
     no_op_action: int = 0
     include_ready_to_shoot: bool = False
+
+    # Reward shaping controls for multi-agent reward-shaped runs.
+    reward_type: str = "utilitarian"
+    reward_alpha: float = 0.5
+    deontological_max_bonus: float = 1.0
+    virtue_scale: float = 1.0
