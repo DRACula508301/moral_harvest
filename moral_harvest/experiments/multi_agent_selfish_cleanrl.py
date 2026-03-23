@@ -11,6 +11,11 @@ import torch.nn as nn
 import torch.optim as optim
 from shimmy import MeltingPotCompatibilityV0
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
+
 from moral_harvest.experiments.single_agent_ppo_cleanrl import _resolve_device
 from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
 from moral_harvest.training.config import SingleAgentTrainConfig
@@ -207,7 +212,13 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
     training_history: list[dict[str, Any]] = []
 
     try:
-        for iteration in range(1, cfg.stop_iters + 1):
+        iteration_range = range(1, cfg.stop_iters + 1)
+        progress = (
+            tqdm(iteration_range, total=cfg.stop_iters, desc="multi-agent-selfish", dynamic_ncols=True)
+            if tqdm is not None
+            else iteration_range
+        )
+        for iteration in progress:
             if cfg.anneal_lr:
                 frac = 1.0 - (iteration - 1.0) / float(cfg.stop_iters)
                 optimizer.param_groups[0]["lr"] = frac * cfg.lr
@@ -264,9 +275,12 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                     num_agents=num_agents,
                 )
                 if not world_rgb_frames and cfg.num_envs == 1:
-                    rendered_frame = base_env.render()
-                    if isinstance(rendered_frame, np.ndarray):
-                        world_rgb_frames = [rendered_frame]
+                    try:
+                        rendered_frame = base_env.render()
+                        if isinstance(rendered_frame, np.ndarray):
+                            world_rgb_frames = [rendered_frame]
+                    except Exception:
+                        world_rgb_frames = []
                 for env_index, world_frame in enumerate(world_rgb_frames):
                     berry_count = count_active_berries_from_world_frame(world_frame, sprite_size=8)
                     berry_observation_steps += 1
@@ -448,18 +462,35 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
             training_history.append(metrics)
             results_writer.write(metrics)
 
-            print(
-                " | ".join(
-                    [
-                        f"iter={iteration}",
-                        f"reward={metrics['episode_reward_mean']}",
-                        f"policy_loss={metrics['policy_loss']}",
-                        f"value_loss={metrics['value_loss']}",
-                        f"entropy={metrics['entropy']}",
-                        f"lr={metrics['learning_rate']}",
-                    ]
+            if tqdm is not None:
+                progress.set_postfix(
+                    {
+                        "reward": metrics["episode_reward_mean"],
+                        "policy": round(metrics["policy_loss"], 4),
+                        "value": round(metrics["value_loss"], 4),
+                        "lr": round(metrics["learning_rate"], 6),
+                    }
                 )
+
+            iteration_summary = " | ".join(
+                [
+                    f"iter={iteration}",
+                    f"reward={metrics['episode_reward_mean']}",
+                    f"policy_loss={metrics['policy_loss']}",
+                    f"value_loss={metrics['value_loss']}",
+                    f"entropy={metrics['entropy']}",
+                    f"lr={metrics['learning_rate']}",
+                    f"apple_reward_total={metrics['apple_reward_total']}",
+                    f"shaping_reward_total={metrics['shaping_reward_total']}",
+                    f"total_reward_total={metrics['total_reward_total']}",
+                    f"berries_end={metrics['total_berries_end']}",
+                    f"berry_lifetime={metrics['berry_lifetime_steps_estimate']}",
+                ]
             )
+            if tqdm is not None:
+                tqdm.write(iteration_summary)
+            else:
+                print(iteration_summary)
 
             if iteration % cfg.checkpoint_every == 0:
                 checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_iter_{iteration:06d}.pt"
@@ -472,7 +503,11 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
                     },
                     checkpoint_path,
                 )
-                print(f"checkpoint_saved={checkpoint_path}")
+                checkpoint_summary = f"checkpoint_saved={checkpoint_path}"
+                if tqdm is not None:
+                    tqdm.write(checkpoint_summary)
+                else:
+                    print(checkpoint_summary)
 
         final_checkpoint_path = checkpoint_root / f"cleanrl_multi_agent_final_iter_{cfg.stop_iters:06d}.pt"
         torch.save(

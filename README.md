@@ -24,6 +24,18 @@ Use:
 .venv-linux/bin/python ...
 ```
 
+Optional dependency sync with `uv` (reuses existing `.venv-linux`; does not create a new env):
+
+```bash
+uv pip install --python .venv-linux/bin/python pytest
+```
+
+Quick test command:
+
+```bash
+.venv-linux/bin/python -m pytest tests/test_reward_shaping.py
+```
+
 ## Training
 
 ### Minimal example (defaults only)
@@ -60,8 +72,15 @@ Reward shaping (used in `multi-agent-reward-shaped` mode):
 
 - `--reward-type {selfish,utilitarian,deontological,virtue,all}` (default: `utilitarian`)
 - `--reward-alpha` (default: `0.5`), used in: `alpha*own + (1-alpha)*shaping`
+- `--shaping-begin` (default: unset): global env step where scheduled shaping starts; before this, alpha is forced to `1.0` (pure individual reward)
+- `--rew-shaping-horizon` (default: unset): number of global env steps over which alpha linearly ramps from `1.0` to `0.0`
 - `--deontological-max-bonus` (default: `1.0`)
 - `--virtue-scale` (default: `1.0`)
+
+Schedule notes:
+
+- To enable schedule, set both `--shaping-begin` and `--rew-shaping-horizon`.
+- If both are unset, static `--reward-alpha` behavior is used.
 
 Optimization / PPO:
 

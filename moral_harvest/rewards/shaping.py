@@ -9,6 +9,47 @@ from moral_harvest.rewards.gini import gini_coefficient, gini_delta
 RewardType = Literal["selfish", "utilitarian", "deontological", "virtue"]
 
 
+def validate_alpha_schedule(
+    shaping_begin: int | None,
+    rew_shaping_horizon: int | None,
+) -> None:
+    if shaping_begin is None and rew_shaping_horizon is None:
+        return
+    if shaping_begin is None or rew_shaping_horizon is None:
+        raise ValueError("Both shaping_begin and rew_shaping_horizon must be provided to enable alpha scheduling.")
+    if shaping_begin < 0:
+        raise ValueError("shaping_begin must be >= 0.")
+    if rew_shaping_horizon <= 0:
+        raise ValueError("rew_shaping_horizon must be > 0.")
+
+
+def compute_effective_alpha(
+    *,
+    base_alpha: float,
+    global_step: int,
+    shaping_begin: int | None,
+    rew_shaping_horizon: int | None,
+) -> float:
+    if not (0.0 <= base_alpha <= 1.0):
+        raise ValueError("base_alpha must be in [0, 1].")
+    if global_step < 0:
+        raise ValueError("global_step must be >= 0.")
+
+    validate_alpha_schedule(shaping_begin=shaping_begin, rew_shaping_horizon=rew_shaping_horizon)
+    if shaping_begin is None or rew_shaping_horizon is None:
+        return base_alpha
+
+    if global_step < shaping_begin:
+        return 1.0
+
+    schedule_end = shaping_begin + rew_shaping_horizon
+    if global_step >= schedule_end:
+        return 0.0
+
+    progress = float(global_step - shaping_begin) / float(rew_shaping_horizon)
+    return max(0.0, min(1.0, 1.0 - progress))
+
+
 @dataclass(slots=True)
 class RewardShapingConfig:
     reward_type: RewardType = "utilitarian"
@@ -38,8 +79,11 @@ class RewardShaper:
         self,
         own_rewards: dict[str, float],
         shaping_rewards: dict[str, float],
+        alpha_override: float | None = None,
     ) -> dict[str, float]:
-        alpha = self.config.alpha
+        alpha = self.config.alpha if alpha_override is None else float(alpha_override)
+        if not (0.0 <= alpha <= 1.0):
+            raise ValueError("alpha must be in [0, 1].")
         return {
             agent_id: alpha * float(own_rewards[agent_id]) + (1.0 - alpha) * float(shaping_rewards[agent_id])
             for agent_id in own_rewards
@@ -78,10 +122,12 @@ class RewardShaper:
             return shaping_rewards, step_metrics
 
         if reward_type == "deontological":
-            shaping_rewards = {
-                agent_id: self._deontological_bonus(agent_id, infos.get(agent_id, {}))
-                for agent_id in own_rewards
-            }
+            shaping_rewards = {}
+            for agent_id in own_rewards:
+                if own_rewards[agent_id] > 0:
+                    shaping_rewards[agent_id] = self._deontological_bonus(agent_id, infos.get(agent_id, {}))
+                else:
+                    shaping_rewards[agent_id] = 0.0
             mean_bonus = float(sum(shaping_rewards.values()) / max(len(shaping_rewards), 1))
             step_metrics = {
                 "shaping_reward_mean": mean_bonus,
@@ -118,9 +164,14 @@ class RewardShaper:
         self,
         own_rewards: dict[str, float],
         infos: dict[str, dict[str, Any]] | None = None,
+        alpha_override: float | None = None,
     ) -> tuple[dict[str, float], dict[str, float | None]]:
         shaping_rewards, step_metrics = self.compute_shaping_rewards(own_rewards=own_rewards, infos=infos)
-        shaped_rewards = self.combine_rewards(own_rewards=own_rewards, shaping_rewards=shaping_rewards)
+        shaped_rewards = self.combine_rewards(
+            own_rewards=own_rewards,
+            shaping_rewards=shaping_rewards,
+            alpha_override=alpha_override,
+        )
 
         own_reward_sum = float(sum(own_rewards.values()))
         shaping_reward_sum = float(sum(shaping_rewards.values()))

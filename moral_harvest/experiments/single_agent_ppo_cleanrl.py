@@ -10,6 +10,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    tqdm = None
+
 from moral_harvest.envs.meltingpot_env import HarvestSingleAgentEnv
 from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
 from moral_harvest.training.config import SingleAgentTrainConfig
@@ -114,7 +119,13 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
 
     try:
         # Main update loop: collect rollout -> optimize PPO -> checkpoint.
-        for iteration in range(1, cfg.stop_iters + 1):
+        iteration_range = range(1, cfg.stop_iters + 1)
+        progress = (
+            tqdm(iteration_range, total=cfg.stop_iters, desc="single-agent", dynamic_ncols=True)
+            if tqdm is not None
+            else iteration_range
+        )
+        for iteration in progress:
             iteration_episode_returns: list[float] = []
             apple_reward_total = 0.0
 
@@ -237,17 +248,28 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
             training_history.append(metrics)
             results_writer.write(metrics)
 
-            print(
-                " | ".join(
-                    [
-                        f"iter={iteration}",
-                        f"reward={metrics['episode_reward_mean']}",
-                        f"policy_loss={metrics['policy_loss']}",
-                        f"value_loss={metrics['value_loss']}",
-                        f"entropy={metrics['entropy']}",
-                    ]
+            if tqdm is not None:
+                progress.set_postfix(
+                    {
+                        "reward": metrics["episode_reward_mean"],
+                        "policy": round(metrics["policy_loss"], 4),
+                        "value": round(metrics["value_loss"], 4),
+                    }
                 )
+
+            iteration_summary = " | ".join(
+                [
+                    f"iter={iteration}",
+                    f"reward={metrics['episode_reward_mean']}",
+                    f"policy_loss={metrics['policy_loss']}",
+                    f"value_loss={metrics['value_loss']}",
+                    f"entropy={metrics['entropy']}",
+                ]
             )
+            if tqdm is not None:
+                tqdm.write(iteration_summary)
+            else:
+                print(iteration_summary)
 
             # Save periodic checkpoints for later rollout/evaluation.
             if iteration % cfg.checkpoint_every == 0:
@@ -261,7 +283,11 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
                     },
                     checkpoint_path,
                 )
-                print(f"checkpoint_saved={checkpoint_path}")
+                checkpoint_summary = f"checkpoint_saved={checkpoint_path}"
+                if tqdm is not None:
+                    tqdm.write(checkpoint_summary)
+                else:
+                    print(checkpoint_summary)
 
         # Save one final checkpoint when training is complete.
         final_checkpoint_path = checkpoint_root / f"cleanrl_final_iter_{cfg.stop_iters:06d}.pt"

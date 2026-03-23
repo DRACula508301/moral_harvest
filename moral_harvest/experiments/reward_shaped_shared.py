@@ -17,7 +17,12 @@ from moral_harvest.experiments.multi_agent_selfish_cleanrl import (
     _reshape_flat_by_agent,
 )
 from moral_harvest.experiments.single_agent_ppo_cleanrl import _resolve_device
-from moral_harvest.rewards.shaping import RewardShaper, RewardShapingConfig
+from moral_harvest.rewards.shaping import (
+    RewardShaper,
+    RewardShapingConfig,
+    compute_effective_alpha,
+    validate_alpha_schedule,
+)
 from moral_harvest.training.config import SingleAgentTrainConfig
 from moral_harvest.training.env_metrics import (
     count_active_berries_from_world_frame,
@@ -74,6 +79,11 @@ def _run_single_reward_type(
     if cfg.num_envs <= 0:
         raise ValueError("--num-envs must be a positive integer.")
 
+    validate_alpha_schedule(
+        shaping_begin=cfg.shaping_begin,
+        rew_shaping_horizon=cfg.rew_shaping_horizon,
+    )
+
     try:
         import supersuit as ss
     except ImportError as exc:  # pragma: no cover
@@ -106,6 +116,8 @@ def _run_single_reward_type(
                 f"device={device}",
                 f"num_envs={cfg.num_envs}",
                 f"alpha={cfg.reward_alpha}",
+                f"shaping_begin={cfg.shaping_begin}",
+                f"rew_shaping_horizon={cfg.rew_shaping_horizon}",
             ]
         )
     )
@@ -210,8 +222,18 @@ def _run_single_reward_type(
             berry_observation_steps = 0
             active_berries_total = 0.0
             berries_end_by_env = [0 for _ in range(cfg.num_envs)]
+            alpha_effective_values: list[float] = []
 
             for step in range(rollout_steps):
+                global_step = ((iteration - 1) * rollout_steps + step) * cfg.num_envs
+                alpha_effective = compute_effective_alpha(
+                    base_alpha=cfg.reward_alpha,
+                    global_step=global_step,
+                    shaping_begin=cfg.shaping_begin,
+                    rew_shaping_horizon=cfg.rew_shaping_horizon,
+                )
+                alpha_effective_values.append(alpha_effective)
+
                 obs_buffer[step] = next_obs
                 terminations_buffer[step] = next_terminations
                 truncations_buffer[step] = next_truncations
@@ -247,6 +269,7 @@ def _run_single_reward_type(
                     shaped_rewards_dict, step_metrics = shapers[env_index].shape_step(
                         own_rewards=own_rewards_dict,
                         infos=env_infos,
+                        alpha_override=alpha_effective,
                     )
                     for agent_index, agent_id in enumerate(agent_ids):
                         shaped_rewards_np[env_index, agent_index] = float(shaped_rewards_dict[agent_id])
@@ -264,9 +287,12 @@ def _run_single_reward_type(
                     num_agents=num_agents,
                 )
                 if not world_rgb_frames and cfg.num_envs == 1:
-                    rendered_frame = base_env.render()
-                    if isinstance(rendered_frame, np.ndarray):
-                        world_rgb_frames = [rendered_frame]
+                    try:
+                        rendered_frame = base_env.render()
+                        if isinstance(rendered_frame, np.ndarray):
+                            world_rgb_frames = [rendered_frame]
+                    except Exception:
+                        world_rgb_frames = []
                 for env_index, world_frame in enumerate(world_rgb_frames):
                     berry_count = count_active_berries_from_world_frame(world_frame, sprite_size=8)
                     berry_observation_steps += 1
@@ -455,6 +481,9 @@ def _run_single_reward_type(
                 "mode": "multi-agent-reward-shaped",
                 "reward_type": reward_type,
                 "run_name": run_name,
+                "reward_alpha_effective": float(np.mean(alpha_effective_values)) if alpha_effective_values else None,
+                "shaping_begin": cfg.shaping_begin,
+                "rew_shaping_horizon": cfg.rew_shaping_horizon,
                 "episode_reward_mean": episode_reward_mean,
                 "policy_loss": last_policy_loss,
                 "value_loss": last_value_loss,
@@ -488,6 +517,11 @@ def _run_single_reward_type(
                         f"policy_loss={metrics['policy_loss']}",
                         f"value_loss={metrics['value_loss']}",
                         f"entropy={metrics['entropy']}",
+                        f"apple_reward_total={metrics['apple_reward_total']}",
+                        f"shaping_reward_total={metrics['shaping_reward_total']}",
+                        f"total_reward_total={metrics['total_reward_total']}",
+                        f"berries_end={metrics['total_berries_end']}",
+                        f"berry_lifetime={metrics['berry_lifetime_steps_estimate']}",
                     ]
                 )
             )

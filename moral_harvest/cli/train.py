@@ -25,8 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", choices=["rllib", "cleanrl"], default="cleanrl")
     parser.add_argument("--substrate", default="commons_harvest__open")
     parser.add_argument("--focal-agent", default="player_0")
-    parser.add_argument("--num-agents", type=int, default=10)
-    parser.add_argument("--num-envs", type=int, default=1)
+    parser.add_argument("--num-agents", type=int, default=7)
+    parser.add_argument("--num-envs", type=int, default=8)
     parser.add_argument("--stop-iters", type=int, default=1000)
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--checkpoint-root", default=None)
@@ -38,6 +38,18 @@ def parse_args() -> argparse.Namespace:
         default="utilitarian",
     )
     parser.add_argument("--reward-alpha", type=float, default=0.5)
+    parser.add_argument(
+        "--shaping-begin",
+        type=int,
+        default=None,
+        help="Global env-step index where shaping schedule begins (alpha forced to 1.0 before this step).",
+    )
+    parser.add_argument(
+        "--rew-shaping-horizon",
+        type=int,
+        default=None,
+        help="Number of global env steps to linearly ramp shaping weight from 0 to 1.",
+    )
     parser.add_argument("--deontological-max-bonus", type=float, default=1.0)
     parser.add_argument("--virtue-scale", type=float, default=1.0)
 
@@ -192,6 +204,8 @@ def main() -> None:
             no_op_action=args.no_op_action,
             reward_type=args.reward_type,
             reward_alpha=args.reward_alpha,
+            shaping_begin=args.shaping_begin,
+            rew_shaping_horizon=args.rew_shaping_horizon,
             deontological_max_bonus=args.deontological_max_bonus,
             virtue_scale=args.virtue_scale,
         )

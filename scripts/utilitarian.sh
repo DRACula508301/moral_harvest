@@ -1,0 +1,13 @@
+.venv-linux/bin/python -m moral_harvest.cli.train \
+    --mode multi-agent-reward-shaped \
+    --reward-type utilitarian \
+    --stop-iters 300 \
+    --checkpoint-every 100 \
+    --stop-iters 2000 \
+    --num-envs 8 \
+    --train-batch-size 1000 \
+    --minibatch-size 1000 \
+    --checkpoint-every 100 \
+    --ent-coef 0.02 \
+    --shaping-begin 300000 \
+    --rew-shaping-horizon 700000

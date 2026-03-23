@@ -6,12 +6,14 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${REPO_ROOT}"
 
-for reward_type in utilitarian deontological virtue; do
-  echo "Running 30-iteration baseline for reward_type=${reward_type}"
+for reward_type in utilitarian virtue; do
+  echo "Running 300-iteration baseline for reward_type=${reward_type}"
   .venv-linux/bin/python -m moral_harvest.cli.train \
     --mode multi-agent-reward-shaped \
     --reward-type "${reward_type}" \
-    --stop-iters 30
+    # --shaping-begin 1600000 \
+    # --rew-shaping-horizon 2400000 \
+    --stop-iters 300
   echo "Completed reward_type=${reward_type}"
   echo
  done

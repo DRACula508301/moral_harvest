@@ -12,7 +12,7 @@ class SingleAgentTrainConfig:
     # Environment selection.
     substrate_name: str = "commons_harvest__open"
     focal_agent: str = "player_0"
-    num_agents: int = 10
+    num_agents: int = 7
 
     # Training horizon and checkpoint cadence.
     stop_iters: int = 1000
@@ -25,7 +25,7 @@ class SingleAgentTrainConfig:
     num_env_runners: int = 0
     train_batch_size: int = 4000
     minibatch_size: int = 512
-    num_epochs: int = 10
+    num_epochs: int = 2
     lr: float = 3e-4
     gamma: float = 0.99
     gae_lambda: float = 0.95
@@ -48,7 +48,7 @@ class SingleAgentTrainConfig:
         ]
     )
     conv_activation: str = "relu"
-    fcnet_hiddens: list[int] = field(default_factory=lambda: [512, 512])
+    fcnet_hiddens: list[int] = field(default_factory=lambda: [512])
     fcnet_activation: str = "relu"
 
     # Runtime framework/resources.
@@ -63,5 +63,7 @@ class SingleAgentTrainConfig:
     # Reward shaping controls for multi-agent reward-shaped runs.
     reward_type: str = "utilitarian"
     reward_alpha: float = 0.5
+    shaping_begin: int | None = None
+    rew_shaping_horizon: int | None = None
     deontological_max_bonus: float = 1.0
     virtue_scale: float = 1.0

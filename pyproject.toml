@@ -19,13 +19,19 @@ dependencies = [
     "matplotlib",
     "ml_collections",
     "numpy",
-    "pettingzoo>=1.22.3",
-    "supersuit",
+    "pettingzoo==1.25.0",
+    "supersuit==3.10.0",
     "torch",
     "shimmy",
     "wandb",
     "moviepy",
+    "tqdm>=4.67.0",
     "pytest>=9.0.2",
+]
+
+[tool.uv]
+override-dependencies = [
+  "pygame>=2.5.2",
 ]
 
 [tool.uv.sources]
