@@ -21,6 +21,20 @@ from moral_harvest.training.config import SingleAgentTrainConfig
 from moral_harvest.training.results_logger import IterationResultsWriter
 
 
+def _fmt_metric_4dp(value: Any) -> str:
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):.4f}"
+    return str(value)
+
+
+def _round_metric_4dp(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating, int, np.integer)):
+        return round(float(value), 4)
+    return None
+
+
 # Compute generalized advantage estimates for one rollout batch.
 def _compute_gae(
     rewards: torch.Tensor,
@@ -251,19 +265,19 @@ def run_single_agent_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, Any]:
             if tqdm is not None:
                 progress.set_postfix(
                     {
-                        "reward": metrics["episode_reward_mean"],
-                        "policy": round(metrics["policy_loss"], 4),
-                        "value": round(metrics["value_loss"], 4),
+                        "reward": _round_metric_4dp(metrics["episode_reward_mean"]),
+                        "policy": _round_metric_4dp(metrics["policy_loss"]),
+                        "value": _round_metric_4dp(metrics["value_loss"]),
                     }
                 )
 
             iteration_summary = " | ".join(
                 [
                     f"iter={iteration}",
-                    f"reward={metrics['episode_reward_mean']}",
-                    f"policy_loss={metrics['policy_loss']}",
-                    f"value_loss={metrics['value_loss']}",
-                    f"entropy={metrics['entropy']}",
+                    f"reward={_fmt_metric_4dp(metrics['episode_reward_mean'])}",
+                    f"policy_loss={_fmt_metric_4dp(metrics['policy_loss'])}",
+                    f"value_loss={_fmt_metric_4dp(metrics['value_loss'])}",
+                    f"entropy={_fmt_metric_4dp(metrics['entropy'])}",
                 ]
             )
             if tqdm is not None:

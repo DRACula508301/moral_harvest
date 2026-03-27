@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
         default="utilitarian",
     )
     parser.add_argument("--reward-alpha", type=float, default=0.5)
+    parser.add_argument("--reward-beta-max", type=float, default=0.5)
     parser.add_argument(
         "--shaping-begin",
         type=int,
@@ -204,6 +205,7 @@ def main() -> None:
             no_op_action=args.no_op_action,
             reward_type=args.reward_type,
             reward_alpha=args.reward_alpha,
+            reward_beta_max=args.reward_beta_max,
             shaping_begin=args.shaping_begin,
             rew_shaping_horizon=args.rew_shaping_horizon,
             deontological_max_bonus=args.deontological_max_bonus,

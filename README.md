@@ -71,16 +71,25 @@ Environment / run control:
 Reward shaping (used in `multi-agent-reward-shaped` mode):
 
 - `--reward-type {selfish,utilitarian,deontological,virtue,all}` (default: `utilitarian`)
-- `--reward-alpha` (default: `0.5`), used in: `alpha*own + (1-alpha)*shaping`
-- `--shaping-begin` (default: unset): global env step where scheduled shaping starts; before this, alpha is forced to `1.0` (pure individual reward)
-- `--rew-shaping-horizon` (default: unset): number of global env steps over which alpha linearly ramps from `1.0` to `0.0`
+- `--reward-alpha` (default: `0.5`), used directly for non-virtue reward types in: `alpha*own + (1-alpha)*shaping`
+- `--reward-beta-max` (default: `0.5`), used by `virtue` reward type as the maximum additive shaping weight
+- `--shaping-begin` (default: unset): global env step where the shaping schedule starts; before this, `alpha_effective=1.0`
+- `--rew-shaping-horizon` (default: unset): number of global env steps over which `alpha_effective` linearly ramps from `1.0` to `0.0`
 - `--deontological-max-bonus` (default: `1.0`)
 - `--virtue-scale` (default: `1.0`)
+
+Per-type reward composition:
+
+- `selfish`, `utilitarian`, `deontological`: `reward = alpha*own + (1-alpha)*shaping`
+- `virtue`: `reward = own + beta*shaping` (extrinsic/own reward is always weighted by `1.0`)
+	- `beta_effective = reward_beta_max * (1 - alpha_effective)`
+	- with scheduling enabled, `beta_effective` ramps from `0.0` to `reward_beta_max` over the same horizon timing
 
 Schedule notes:
 
 - To enable schedule, set both `--shaping-begin` and `--rew-shaping-horizon`.
-- If both are unset, static `--reward-alpha` behavior is used.
+- If both are unset, `alpha_effective` stays at `--reward-alpha`.
+- This means for `virtue`, static `beta_effective = reward_beta_max * (1 - reward_alpha)` when schedule flags are unset.
 
 Optimization / PPO:
 

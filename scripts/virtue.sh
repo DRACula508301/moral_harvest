@@ -1,7 +1,12 @@
 .venv-linux/bin/python -m moral_harvest.cli.train \
     --mode multi-agent-reward-shaped \
     --reward-type virtue \
-    # --shaping-begin 1600000 \
-    # --rew-shaping-horizon 2400000 \
-    --stop-iters 300 \
-    --checkpoint-every 100
+    --stop-iters 2000 \
+    --num-envs 8 \
+    --train-batch-size 1000 \
+    --minibatch-size 1000 \
+    --checkpoint-every 100 \
+    --ent-coef 0.02 \
+    --shaping-begin 1000000 \
+    --rew-shaping-horizon 2500000 \
+    --reward-beta-max 0.5 \

@@ -54,6 +54,7 @@ def compute_effective_alpha(
 class RewardShapingConfig:
     reward_type: RewardType = "utilitarian"
     alpha: float = 0.5
+    beta_max: float = 0.5
     deontological_max_bonus: float = 1.0
     virtue_scale: float = 1.0
 
@@ -66,6 +67,8 @@ class RewardShaper:
             raise ValueError("alpha must be in [0, 1].")
         if self.config.deontological_max_bonus < 0.0:
             raise ValueError("deontological_max_bonus must be non-negative.")
+        if self.config.beta_max < 0.0:
+            raise ValueError("beta_max must be non-negative.")
         if self.config.virtue_scale < 0.0:
             raise ValueError("virtue_scale must be non-negative.")
         self._previous_gini: float | None = None
@@ -80,7 +83,17 @@ class RewardShaper:
         own_rewards: dict[str, float],
         shaping_rewards: dict[str, float],
         alpha_override: float | None = None,
+        beta_override: float | None = None,
     ) -> dict[str, float]:
+        if self.config.reward_type == "virtue":
+            beta = self.config.beta_max if beta_override is None else float(beta_override)
+            if beta < 0.0:
+                raise ValueError("beta must be non-negative.")
+            return {
+                agent_id: float(own_rewards[agent_id]) + beta * float(shaping_rewards[agent_id])
+                for agent_id in own_rewards
+            }
+
         alpha = self.config.alpha if alpha_override is None else float(alpha_override)
         if not (0.0 <= alpha <= 1.0):
             raise ValueError("alpha must be in [0, 1].")
@@ -146,14 +159,16 @@ class RewardShaper:
                 delta = gini_delta(self._previous_gini, current_gini)
             self._previous_gini = current_gini
 
-            bonus = -delta * self.config.virtue_scale
+            # Compress raw Gini delta from [-1, 1] to [-0.5, 0.5] before beta scaling.
+            delta_mapped = 0.5 * float(max(-1.0, min(1.0, delta)))
+            bonus = -delta_mapped * self.config.virtue_scale
             shaping_rewards = {agent_id: bonus for agent_id in own_rewards}
             step_metrics = {
                 "shaping_reward_mean": bonus,
                 "utilitarian_mean_reward": None,
                 "deontological_bonus_mean": None,
                 "virtue_current_gini": current_gini,
-                "virtue_delta_gini": delta,
+                "virtue_delta_gini": delta_mapped,
             }
             return shaping_rewards, step_metrics
 
@@ -165,12 +180,14 @@ class RewardShaper:
         own_rewards: dict[str, float],
         infos: dict[str, dict[str, Any]] | None = None,
         alpha_override: float | None = None,
+        beta_override: float | None = None,
     ) -> tuple[dict[str, float], dict[str, float | None]]:
         shaping_rewards, step_metrics = self.compute_shaping_rewards(own_rewards=own_rewards, infos=infos)
         shaped_rewards = self.combine_rewards(
             own_rewards=own_rewards,
             shaping_rewards=shaping_rewards,
             alpha_override=alpha_override,
+            beta_override=beta_override,
         )
 
         own_reward_sum = float(sum(own_rewards.values()))

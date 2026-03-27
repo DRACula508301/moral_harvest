@@ -18,6 +18,10 @@ from moral_harvest.envs.registry import register_environments
 from moral_harvest.training.cnn_actor_critic import CleanRLCNNActorCritic
 
 
+def _fmt_metric_4dp(value: float) -> str:
+    return f"{float(value):.4f}"
+
+
 # Parse CLI arguments for single-agent checkpoint rollout.
 def parse_args() -> argparse.Namespace:
     # Build parser for checkpoint path and rollout controls.
@@ -186,7 +190,7 @@ def main() -> None:
             result["episode"] = episode_idx + 1
             episode_results.append(result)
             print(
-                f"episode={result['episode']} steps={result['steps']} total_reward={result['total_reward']}"
+                f"episode={result['episode']} steps={result['steps']} total_reward={_fmt_metric_4dp(float(result['total_reward']))}"
             )
 
         # Emit JSON summary for easy post-processing.

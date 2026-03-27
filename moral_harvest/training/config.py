@@ -63,6 +63,7 @@ class SingleAgentTrainConfig:
     # Reward shaping controls for multi-agent reward-shaped runs.
     reward_type: str = "utilitarian"
     reward_alpha: float = 0.5
+    reward_beta_max: float = 0.5
     shaping_begin: int | None = None
     rew_shaping_horizon: int | None = None
     deontological_max_bonus: float = 1.0

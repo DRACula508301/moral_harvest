@@ -58,19 +58,20 @@ def test_deontological_neighbor_bins_follow_spec() -> None:
 
 
 def test_virtue_bonus_positive_when_gini_drops() -> None:
-    shaper = RewardShaper(RewardShapingConfig(reward_type="virtue", alpha=0.0, virtue_scale=1.0))
+    shaper = RewardShaper(RewardShapingConfig(reward_type="virtue", alpha=0.0, beta_max=0.5, virtue_scale=1.0))
 
     # First call seeds previous gini and returns zero delta bonus.
     first_shaped, first_metrics = shaper.shape_step({"player_0": 0.0, "player_1": 10.0})
     assert first_shaped["player_0"] == 0.0
+    assert first_shaped["player_1"] == 10.0
     assert first_metrics["virtue_delta_gini"] == 0.0
 
     # More equal rewards -> lower gini -> negative delta -> positive bonus.
     second_shaped, second_metrics = shaper.shape_step({"player_0": 5.0, "player_1": 5.0})
     assert second_metrics["virtue_delta_gini"] is not None
     assert second_metrics["virtue_delta_gini"] < 0.0
-    assert second_shaped["player_0"] > 0.0
-    assert second_shaped["player_1"] > 0.0
+    assert second_shaped["player_0"] > 5.0
+    assert second_shaped["player_1"] > 5.0
 
 
 def test_alpha_override_changes_blend_for_step() -> None:
@@ -85,11 +86,48 @@ def test_alpha_override_changes_blend_for_step() -> None:
     assert shaped_collective["player_1"] == 2.0
 
 
+def test_virtue_beta_override_scales_additive_bonus() -> None:
+    shaper = RewardShaper(RewardShapingConfig(reward_type="virtue", alpha=0.0, beta_max=0.5, virtue_scale=1.0))
+
+    # Seed previous gini.
+    shaper.shape_step({"player_0": 0.0, "player_1": 10.0}, beta_override=0.0)
+
+    shaped_rewards, metrics = shaper.shape_step(
+        {"player_0": 5.0, "player_1": 5.0},
+        beta_override=0.5,
+    )
+    assert metrics["shaping_reward_mean"] is not None
+    expected_bonus = float(metrics["shaping_reward_mean"])
+    assert shaped_rewards["player_0"] == 5.0 + 0.5 * expected_bonus
+    assert shaped_rewards["player_1"] == 5.0 + 0.5 * expected_bonus
+
+
+def test_non_virtue_ignores_beta_override_and_uses_alpha() -> None:
+    shaper = RewardShaper(RewardShapingConfig(reward_type="utilitarian", alpha=1.0, beta_max=0.5))
+    own_rewards = {"player_0": 1.0, "player_1": 3.0}
+
+    shaped_rewards, _ = shaper.shape_step(own_rewards, alpha_override=1.0, beta_override=10.0)
+
+    assert shaped_rewards == own_rewards
+
+
 def test_alpha_override_validation() -> None:
     shaper = RewardShaper(RewardShapingConfig(reward_type="utilitarian", alpha=0.5))
 
     with pytest.raises(ValueError, match="alpha must be in \[0, 1\]"):
         shaper.shape_step({"player_0": 1.0}, alpha_override=1.5)
+
+
+def test_beta_override_validation_for_virtue() -> None:
+    shaper = RewardShaper(RewardShapingConfig(reward_type="virtue", alpha=0.0, beta_max=0.5, virtue_scale=1.0))
+
+    with pytest.raises(ValueError, match="beta must be non-negative"):
+        shaper.shape_step({"player_0": 1.0}, beta_override=-0.1)
+
+
+def test_beta_max_validation() -> None:
+    with pytest.raises(ValueError, match="beta_max must be non-negative"):
+        RewardShaper(RewardShapingConfig(reward_type="virtue", beta_max=-0.1))
 
 
 def test_compute_effective_alpha_schedule_boundaries() -> None:

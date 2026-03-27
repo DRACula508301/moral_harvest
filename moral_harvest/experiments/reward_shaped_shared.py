@@ -31,6 +31,12 @@ from moral_harvest.training.env_metrics import (
 from moral_harvest.training.results_logger import IterationResultsWriter
 
 
+def _fmt_metric_4dp(value: Any) -> str:
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):.4f}"
+    return str(value)
+
+
 SUPPORTED_REWARD_TYPES = ("selfish", "utilitarian", "deontological", "virtue")
 
 
@@ -116,6 +122,7 @@ def _run_single_reward_type(
                 f"device={device}",
                 f"num_envs={cfg.num_envs}",
                 f"alpha={cfg.reward_alpha}",
+                f"beta_max={cfg.reward_beta_max}",
                 f"shaping_begin={cfg.shaping_begin}",
                 f"rew_shaping_horizon={cfg.rew_shaping_horizon}",
             ]
@@ -136,6 +143,7 @@ def _run_single_reward_type(
             RewardShapingConfig(
                 reward_type=reward_type,
                 alpha=cfg.reward_alpha,
+                beta_max=cfg.reward_beta_max,
                 deontological_max_bonus=cfg.deontological_max_bonus,
                 virtue_scale=cfg.virtue_scale,
             )
@@ -223,6 +231,7 @@ def _run_single_reward_type(
             active_berries_total = 0.0
             berries_end_by_env = [0 for _ in range(cfg.num_envs)]
             alpha_effective_values: list[float] = []
+            beta_effective_values: list[float] = []
 
             for step in range(rollout_steps):
                 global_step = ((iteration - 1) * rollout_steps + step) * cfg.num_envs
@@ -233,6 +242,9 @@ def _run_single_reward_type(
                     rew_shaping_horizon=cfg.rew_shaping_horizon,
                 )
                 alpha_effective_values.append(alpha_effective)
+                beta_effective = cfg.reward_beta_max * (1.0 - alpha_effective)
+                if reward_type == "virtue":
+                    beta_effective_values.append(beta_effective)
 
                 obs_buffer[step] = next_obs
                 terminations_buffer[step] = next_terminations
@@ -270,6 +282,7 @@ def _run_single_reward_type(
                         own_rewards=own_rewards_dict,
                         infos=env_infos,
                         alpha_override=alpha_effective,
+                        beta_override=beta_effective,
                     )
                     for agent_index, agent_id in enumerate(agent_ids):
                         shaped_rewards_np[env_index, agent_index] = float(shaped_rewards_dict[agent_id])
@@ -482,6 +495,7 @@ def _run_single_reward_type(
                 "reward_type": reward_type,
                 "run_name": run_name,
                 "reward_alpha_effective": float(np.mean(alpha_effective_values)) if alpha_effective_values else None,
+                "reward_beta_effective": float(np.mean(beta_effective_values)) if beta_effective_values else None,
                 "shaping_begin": cfg.shaping_begin,
                 "rew_shaping_horizon": cfg.rew_shaping_horizon,
                 "episode_reward_mean": episode_reward_mean,
@@ -513,15 +527,15 @@ def _run_single_reward_type(
                     [
                         f"iter={iteration}",
                         f"reward_type={reward_type}",
-                        f"reward={metrics['episode_reward_mean']}",
-                        f"policy_loss={metrics['policy_loss']}",
-                        f"value_loss={metrics['value_loss']}",
-                        f"entropy={metrics['entropy']}",
-                        f"apple_reward_total={metrics['apple_reward_total']}",
-                        f"shaping_reward_total={metrics['shaping_reward_total']}",
-                        f"total_reward_total={metrics['total_reward_total']}",
+                        f"reward={_fmt_metric_4dp(metrics['episode_reward_mean'])}",
+                        f"policy_loss={_fmt_metric_4dp(metrics['policy_loss'])}",
+                        f"value_loss={_fmt_metric_4dp(metrics['value_loss'])}",
+                        f"entropy={_fmt_metric_4dp(metrics['entropy'])}",
+                        f"apple_reward_total={_fmt_metric_4dp(metrics['apple_reward_total'])}",
+                        f"shaping_reward_total={_fmt_metric_4dp(metrics['shaping_reward_total'])}",
+                        f"total_reward_total={_fmt_metric_4dp(metrics['total_reward_total'])}",
                         f"berries_end={metrics['total_berries_end']}",
-                        f"berry_lifetime={metrics['berry_lifetime_steps_estimate']}",
+                        f"berry_lifetime={_fmt_metric_4dp(metrics['berry_lifetime_steps_estimate'])}",
                     ]
                 )
             )

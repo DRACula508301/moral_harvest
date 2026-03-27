@@ -26,6 +26,20 @@ from moral_harvest.training.env_metrics import (
 from moral_harvest.training.results_logger import IterationResultsWriter
 
 
+def _fmt_metric_4dp(value: Any) -> str:
+    if isinstance(value, (float, np.floating)):
+        return f"{float(value):.4f}"
+    return str(value)
+
+
+def _round_metric_4dp(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (float, np.floating, int, np.integer)):
+        return round(float(value), 4)
+    return None
+
+
 # Stack one independent policy/value submodule per agent under one nn.Module.
 class MultiAgentCleanRLCNN(nn.Module):
     # Build per-agent actor-critic modules with shared architecture.
@@ -465,26 +479,26 @@ def run_multi_agent_selfish_cleanrl(cfg: SingleAgentTrainConfig) -> dict[str, An
             if tqdm is not None:
                 progress.set_postfix(
                     {
-                        "reward": metrics["episode_reward_mean"],
-                        "policy": round(metrics["policy_loss"], 4),
-                        "value": round(metrics["value_loss"], 4),
-                        "lr": round(metrics["learning_rate"], 6),
+                        "reward": _round_metric_4dp(metrics["episode_reward_mean"]),
+                        "policy": _round_metric_4dp(metrics["policy_loss"]),
+                        "value": _round_metric_4dp(metrics["value_loss"]),
+                        "lr": _round_metric_4dp(metrics["learning_rate"]),
                     }
                 )
 
             iteration_summary = " | ".join(
                 [
                     f"iter={iteration}",
-                    f"reward={metrics['episode_reward_mean']}",
-                    f"policy_loss={metrics['policy_loss']}",
-                    f"value_loss={metrics['value_loss']}",
-                    f"entropy={metrics['entropy']}",
-                    f"lr={metrics['learning_rate']}",
-                    f"apple_reward_total={metrics['apple_reward_total']}",
-                    f"shaping_reward_total={metrics['shaping_reward_total']}",
-                    f"total_reward_total={metrics['total_reward_total']}",
+                    f"reward={_fmt_metric_4dp(metrics['episode_reward_mean'])}",
+                    f"policy_loss={_fmt_metric_4dp(metrics['policy_loss'])}",
+                    f"value_loss={_fmt_metric_4dp(metrics['value_loss'])}",
+                    f"entropy={_fmt_metric_4dp(metrics['entropy'])}",
+                    f"lr={_fmt_metric_4dp(metrics['learning_rate'])}",
+                    f"apple_reward_total={_fmt_metric_4dp(metrics['apple_reward_total'])}",
+                    f"shaping_reward_total={_fmt_metric_4dp(metrics['shaping_reward_total'])}",
+                    f"total_reward_total={_fmt_metric_4dp(metrics['total_reward_total'])}",
                     f"berries_end={metrics['total_berries_end']}",
-                    f"berry_lifetime={metrics['berry_lifetime_steps_estimate']}",
+                    f"berry_lifetime={_fmt_metric_4dp(metrics['berry_lifetime_steps_estimate'])}",
                 ]
             )
             if tqdm is not None:
